@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local data (private)
+data/config.json       # Contains secrets - use config.json.example
+data/filings_cache.json # Local cache - regenerate on run
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
