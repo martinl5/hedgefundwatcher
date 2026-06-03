@@ -27,5 +27,4 @@ jobs:
         run: mypy .
 
       - name: Run tests
-        run: pytest --cov=. --cov-report=term-missing --cov-fail-under=70
-        # main.py is excluded from coverage (CLI entry point; needs integration tests)
+        run: python -m pytest tests/ --cov=. --cov-report=term-missing --cov-fail-under=70
