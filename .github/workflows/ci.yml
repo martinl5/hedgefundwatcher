@@ -27,4 +27,8 @@ jobs:
         run: mypy .
 
       - name: Run tests
-        run: python -m pytest tests/ --cov=. --cov-report=term-missing --cov-fail-under=70
+        run: >
+          python -m pytest tests/
+          --cov=models --cov=notifier --cov=sec_base --cov=sec_client --cov=sec_filings
+          --cov-report=term-missing
+          --cov-fail-under=70
