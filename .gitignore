@@ -34,3 +34,8 @@ data/filings_cache.json # Local cache - regenerate on run
 
 # Logs
 *.log
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
