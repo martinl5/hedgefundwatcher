@@ -1,0 +1,9 @@
+[run]
+source = .
+omit =
+    tests/*
+    main.py
+    sp500.py
+
+[report]
+fail_under = 70

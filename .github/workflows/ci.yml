@@ -26,9 +26,13 @@ jobs:
       - name: Type check (mypy)
         run: mypy .
 
+      - name: Debug environment
+        run: |
+          python --version
+          python -c "import sys; print('sys.path:', sys.path)"
+          python -c "import models; print('models import: OK')"
+          python -c "import sec_client; print('sec_client import: OK')"
+          python -c "import pytest_cov; print('pytest_cov import: OK')"
+
       - name: Run tests
-        run: >
-          python -m pytest tests/
-          --cov=models --cov=notifier --cov=sec_base --cov=sec_client --cov=sec_filings
-          --cov-report=term-missing
-          --cov-fail-under=70
+        run: python -m pytest tests/ -v --tb=long --cov=. --cov-report=term-missing --cov-fail-under=70
