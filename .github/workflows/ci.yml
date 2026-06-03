@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Type check (mypy)
+        run: mypy .
+
+      - name: Debug environment
+        run: |
+          python --version
+          python -c "import sys; print('sys.path:', sys.path)"
+          python -c "import models; print('models import: OK')"
+          python -c "import sec_client; print('sec_client import: OK')"
+          python -c "import pytest_cov; print('pytest_cov import: OK')"
+
+      - name: Run tests (no coverage)
+        run: python -m pytest tests/ -v --tb=long
+
+      - name: Coverage check
+        run: python -m pytest tests/ --cov=. --cov-report=term-missing --cov-fail-under=70
