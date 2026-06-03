@@ -34,5 +34,8 @@ jobs:
           python -c "import sec_client; print('sec_client import: OK')"
           python -c "import pytest_cov; print('pytest_cov import: OK')"
 
-      - name: Run tests
-        run: python -m pytest tests/ -v --tb=long --cov=. --cov-report=term-missing --cov-fail-under=70
+      - name: Run tests (no coverage)
+        run: python -m pytest tests/ -v --tb=long
+
+      - name: Coverage check
+        run: python -m pytest tests/ --cov=. --cov-report=term-missing --cov-fail-under=70

@@ -1,7 +1,9 @@
 [run]
 source = .
 omit =
-    tests/*
+    */tests/*
+    */main.py
+    */sp500.py
     main.py
     sp500.py
 
