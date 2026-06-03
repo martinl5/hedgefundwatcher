@@ -68,7 +68,7 @@ def _capture_alert(changes: HoldingsChange) -> str:
 def test_alert_no_changes_sends_nothing():
     sent: list = []
     notifier = TelegramNotifier(TOKEN, CHAT_ID)
-    notifier.send_message = lambda t, **kw: sent.append(t) or True  # type: ignore[method-assign]
+    notifier.send_message = lambda t, **kw: sent.append(t) or True
     notifier.send_filing_alert("Fund", "2024-01-01", HoldingsChange())
     assert sent == []
 

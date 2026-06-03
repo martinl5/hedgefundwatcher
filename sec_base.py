@@ -43,7 +43,8 @@ class SECBaseClient:
         try:
             response = self.session.get(url, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
-            return response.json()
+            data: dict = response.json()
+            return data
         except requests.RequestException as e:
             logger.error("Failed to fetch submissions for CIK %s: %s", cik, e)
             return None

@@ -150,6 +150,8 @@ class SECFilingsClient(SECBaseClient):
             soup = BeautifulSoup(response.content, "html.parser")
             for link in soup.find_all("a"):
                 href = link.get("href", "")
+                if not isinstance(href, str):
+                    continue
                 text = link.get_text(strip=True).lower()
                 if (
                     "form4" in text

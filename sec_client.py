@@ -64,6 +64,8 @@ class SECClient(SECBaseClient):
             soup = BeautifulSoup(response.content, "html.parser")
             for link in soup.find_all("a"):
                 href = link.get("href", "")
+                if not isinstance(href, str):
+                    continue
                 if (
                     ".xml" in href
                     and "xbrl" not in href.lower()
