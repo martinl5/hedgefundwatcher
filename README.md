@@ -21,9 +21,16 @@ Track institutional investor filings (13F, 13D, Form 4 insider) via SEC EDGAR wi
 
 ### 2. Configure
 
+Provide Telegram credentials via environment variables (recommended — they are
+never written to disk):
+
 ```bash
-python main.py --token "YOUR_BOT_TOKEN" --chat-id "YOUR_CHAT_ID"
+export TELEGRAM_TOKEN="YOUR_BOT_TOKEN"
+export TELEGRAM_CHAT_ID="YOUR_CHAT_ID"
 ```
+
+Or pass them per-command with `--token` / `--chat-id`. The local
+`data/config.json` only stores the tracked-fund list, not secrets.
 
 ### 3. Add Funds to Track
 
@@ -74,7 +81,6 @@ python main.py insider --days 7
 | `list` | Show tracked funds |
 | `known` | List known hedge fund CIKs |
 | `test-telegram` | Test Telegram setup |
-| `scheduler` | Run weekly scheduler |
 
 ## Insider Search (Form 4)
 
@@ -122,15 +128,33 @@ Each alert shows:
 | Berkshire Hathaway | 1067983 | 2026-02-17 |
 | D.E. Shaw | 1009207 | 2026-02-17 |
 
-## Cron Job (Weekly)
+## Scheduled Runs (Quarterly)
 
-The system is set up to run automatically:
+13F-HR filings are due ~45 days after each quarter ends, so new filings appear
+in **mid-February, mid-May, mid-August, and mid-November**. There's no value in
+running year-round.
+
+The repo ships a GitHub Actions workflow (`.github/workflows/quarterly-scan.yml`)
+that runs `main.py run` daily during those four months and stays idle otherwise.
+Runs are idempotent — each filing is alerted only once (tracked via
+`last_filing_date`) — so the daily cadence never produces duplicate alerts.
+
+To enable it, add two repository secrets:
+
+- `TELEGRAM_TOKEN`
+- `TELEGRAM_CHAT_ID`
+
+You can also trigger it manually from the Actions tab (`workflow_dispatch`).
+
+### Running it yourself (cron)
+
+To run on your own machine instead, schedule the `run` command, e.g. weekdays
+at 9:30 AM:
 
 ```bash
-30 9 * * 0 /usr/bin/python3 /Users/martin/Desktop/ray_dalio/main.py run
+30 9 * * 1-5 cd /path/to/hedgefundwatcher && \
+  TELEGRAM_TOKEN=... TELEGRAM_CHAT_ID=... python3 main.py run
 ```
-
-Runs every Sunday at 9:30 AM to check for new filings.
 
 ## How It Works
 
@@ -145,6 +169,7 @@ Runs every Sunday at 9:30 AM to check for new filings.
 ```
 hedge_fund_watcher/
 ├── main.py              # CLI entry point
+├── sec_base.py          # Shared SEC client (rate limiting + retry/backoff)
 ├── sec_client.py        # SEC EDGAR API (13F)
 ├── sec_filings.py       # SEC API (13D, Form 4)
 ├── sp500.py             # S&P 500 companies with CIKs

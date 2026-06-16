@@ -39,7 +39,7 @@ def test_parse_13f_filing_first_holding_values():
     apple = next(h for h in result.holdings if h.name == "APPLE INC")
     assert apple.value == 5_000_000
     assert apple.shares == 25_000
-    assert apple.ticker == "037833"  # first 6 chars of CUSIP
+    assert apple.cusip == "037833"  # first 6 chars of CUSIP
 
 
 def test_parse_13f_filing_bad_numbers_default_to_zero():
@@ -80,7 +80,7 @@ def test_compare_filings_detects_new_position():
     ])
     new_pos, inc, dec, rem = compare_filings(old, new)
     assert len(new_pos) == 1
-    assert new_pos[0].ticker == "MSFT"
+    assert new_pos[0].cusip == "MSFT"
     assert inc == []
     assert dec == []
     assert rem == []
@@ -94,7 +94,7 @@ def test_compare_filings_detects_removed_position():
     new = _make_filing([Holding("AAPL", "Apple", 100, 10_000)])
     new_pos, inc, dec, rem = compare_filings(old, new)
     assert len(rem) == 1
-    assert rem[0].ticker == "MSFT"
+    assert rem[0].cusip == "MSFT"
 
 
 def test_compare_filings_detects_increased_position():
@@ -102,7 +102,7 @@ def test_compare_filings_detects_increased_position():
     new = _make_filing([Holding("AAPL", "Apple", 150, 15_000)])
     new_pos, inc, dec, rem = compare_filings(old, new)
     assert len(inc) == 1
-    assert inc[0][0].ticker == "AAPL"
+    assert inc[0][0].cusip == "AAPL"
     assert inc[0][1].value == 15_000
 
 

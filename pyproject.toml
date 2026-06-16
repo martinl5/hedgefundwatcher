@@ -35,3 +35,6 @@ addopts = "--tb=short"
 source = ["."]
 # main.py is a CLI entry point; its paths are covered by integration tests, not unit tests
 omit = ["tests/*", "sp500.py", "main.py"]
+
+[tool.coverage.report]
+fail_under = 70

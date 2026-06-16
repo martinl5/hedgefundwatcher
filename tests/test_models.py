@@ -8,15 +8,21 @@ from models import Config, Filing, FilingCache, Holding, HoldingsChange, Tracked
 
 
 def test_holding_round_trip():
-    h = Holding(ticker="AAPL", name="Apple Inc", shares=1000, value=175000.0)
+    h = Holding(cusip="037833", name="Apple Inc", shares=1000, value=175000.0)
     assert Holding.from_dict(h.to_dict()) == h
 
 
 def test_holding_from_dict_defaults():
     h = Holding.from_dict({})
-    assert h.ticker == ""
+    assert h.cusip == ""
     assert h.shares == 0
     assert h.value == 0.0
+
+
+def test_holding_from_dict_accepts_legacy_ticker_key():
+    # Caches written before the cusip rename used a "ticker" key.
+    h = Holding.from_dict({"ticker": "037833", "name": "Apple", "shares": 1, "value": 2.0})
+    assert h.cusip == "037833"
 
 
 # ──────────────────────────── Filing ─────────────────────────────
@@ -50,24 +56,24 @@ def test_holdings_change_has_changes_true():
 # ──────────────────────────── Config ─────────────────────────────
 
 
-def test_config_save_and_load():
+def test_config_save_persists_funds_but_not_secrets():
     with tempfile.TemporaryDirectory() as tmpdir:
         cfg = Config()
         cfg.data_dir = tmpdir
         cfg.telegram_token = "1234567890:ABCDefghijklmnopqrstuvwxyzABCDEFGHI"
         cfg.telegram_chat_id = "-100123456"
-        fund = TrackedFund(cik="1649339", name="Scion Capital")
-        cfg.tracked_funds = [fund]
+        cfg.tracked_funds = [TrackedFund(cik="1649339", name="Scion Capital")]
         cfg.save()
 
         cfg2 = Config()
         cfg2.data_dir = tmpdir
         cfg2.load()
 
-        assert cfg2.telegram_token == cfg.telegram_token
-        assert cfg2.telegram_chat_id == cfg.telegram_chat_id
+        # Funds round-trip; secrets are intentionally never written to disk.
         assert len(cfg2.tracked_funds) == 1
         assert cfg2.tracked_funds[0].cik == "1649339"
+        assert cfg2.telegram_token == ""
+        assert cfg2.telegram_chat_id == ""
 
 
 def test_config_load_missing_file_is_noop():

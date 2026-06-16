@@ -5,7 +5,6 @@ import logging
 import os
 import re
 import sys
-import time
 
 from models import Config, Filing, FilingCache, HoldingsChange, TrackedFund
 from notifier import TelegramNotifier
@@ -74,20 +73,32 @@ class OutputHandler:
 
 
 def setup_config(args: argparse.Namespace) -> Config:
-    """Load config and apply any CLI credential overrides."""
+    """Load config and resolve Telegram credentials.
+
+    Credential precedence: ``--token``/``--chat-id`` flags, then the
+    ``TELEGRAM_TOKEN``/``TELEGRAM_CHAT_ID`` environment variables, then any
+    value previously stored in config.json. Secrets are never written back
+    to disk — the config file holds only the tracked-fund list.
+    """
     config = Config()
     config.data_dir = DATA_DIR
     config.load()
 
-    if args.telegram_token:
-        config.telegram_token = args.telegram_token
-    if args.telegram_chat_id:
-        config.telegram_chat_id = args.telegram_chat_id
-
-    if config.telegram_token or config.telegram_chat_id:
-        config.save()
+    config.telegram_token = (
+        args.telegram_token or os.environ.get("TELEGRAM_TOKEN") or config.telegram_token
+    )
+    config.telegram_chat_id = (
+        args.telegram_chat_id or os.environ.get("TELEGRAM_CHAT_ID") or config.telegram_chat_id
+    )
 
     return config
+
+
+def make_notifier(config: Config) -> TelegramNotifier | None:
+    """Return a configured TelegramNotifier, or None if credentials are missing."""
+    if config.telegram_token and config.telegram_chat_id:
+        return TelegramNotifier(config.telegram_token, config.telegram_chat_id)
+    return None
 
 
 def run_scan(
@@ -150,13 +161,18 @@ def run_scan(
                     removed_positions=[],
                 )
 
+            # Deliver the alert *before* recording the filing as seen, so a
+            # failed Telegram send leaves the filing to be retried next run
+            # rather than silently swallowed.
+            if notifier:
+                logger.info("    Sending alert...")
+                if not notifier.send_filing_alert(fund.name, filing_date, changes):
+                    logger.warning("    Alert delivery failed — will retry %s next run", fund.name)
+                    continue
+
             cache.update_filing(parsed_filing)
             fund.last_filing_date = filing_date
             config.save()
-
-            if notifier:
-                logger.info("    Sending alert...")
-                notifier.send_filing_alert(fund.name, filing_date, changes)
 
             results.append({"fund": fund.name, "filing_date": filing_date, "changes": changes})
             logger.info("    ✓ Processed (filing date: %s)", filing_date)
@@ -360,7 +376,7 @@ def compare_funds(
 
             holdings_dict = {
                 h.name.upper().strip(): {
-                    "ticker": h.ticker,
+                    "cusip": h.cusip,
                     "name": h.name,
                     "value": h.value,
                     "shares": h.shares,
@@ -417,8 +433,8 @@ def compare_funds(
         sorted_by_value.sort(key=lambda x: x[2], reverse=True)
 
         for stock, funds, total_value in sorted_by_value[:8]:
-            ticker = all_holdings[funds[0]][stock]["ticker"]
-            out.add(f"\n📈 {stock} ({ticker}) - ${total_value / 1_000_000:.1f}M")
+            cusip = all_holdings[funds[0]][stock]["cusip"]
+            out.add(f"\n📈 {stock} (CUSIP {cusip}) - ${total_value / 1_000_000:.1f}M")
             for fn in funds:
                 val = all_holdings[fn][stock]["value"]
                 out.add(f"   {fn[:12]}: ${val / 1_000_000:.1f}M")
@@ -435,12 +451,12 @@ def compare_funds(
     for holdings in all_holdings.values():
         for name, data in holdings.items():
             if name not in aggregate:
-                aggregate[name] = {"ticker": data["ticker"], "value": 0}
+                aggregate[name] = {"cusip": data["cusip"], "value": 0}
             aggregate[name]["value"] += data["value"]
 
     top_aggregated = sorted(aggregate.items(), key=lambda x: x[1]["value"], reverse=True)[:10]
     for i, (name, data) in enumerate(top_aggregated, 1):
-        out.add(f"{i}. {name} ({data['ticker']}): ${data['value'] / 1_000_000:.1f}M")
+        out.add(f"{i}. {name} (CUSIP {data['cusip']}): ${data['value'] / 1_000_000:.1f}M")
 
     if notifier:
         out.send_to_telegram("Fund Comparison")
@@ -508,8 +524,9 @@ def search_insider(
 
     all_filings: list[dict] = []
 
-    # Limit to top 50 to avoid SEC rate-limit timeouts
-    companies = list(SP500_COMPANIES.items())[:50]
+    # Limit the number of companies scanned to avoid long, rate-limited runs.
+    limit = getattr(args, "limit", 50)
+    companies = list(SP500_COMPANIES.items())[:limit]
 
     for ticker, info in companies:
         cik = info["cik"]
@@ -613,30 +630,6 @@ def test_telegram(config: Config) -> None:
         print("❌ Failed to send test message")
 
 
-def run_scheduler(config: Config) -> None:
-    """Run the weekly scheduler loop."""
-    import schedule
-
-    print("HedgeFundWatcher Scheduler Started")
-    print("Runs: Every Sunday at 9:00 AM")
-    print(f"Tracked funds: {len(config.tracked_funds)}")
-    print("Press Ctrl+C to stop\n")
-
-    cache = FilingCache(DATA_DIR)
-    notifier = (
-        TelegramNotifier(config.telegram_token, config.telegram_chat_id)
-        if config.telegram_token and config.telegram_chat_id
-        else None
-    )
-    run_scan(config, cache, notifier)
-
-    schedule.every().sunday.at("09:00").do(run_scan, config=config, cache=cache, notifier=notifier)
-
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="HedgeFundWatcher - Track SEC 13F filings and get Telegram alerts",
@@ -648,7 +641,11 @@ Examples:
   python main.py list                                   # List tracked funds
   python main.py known                                  # List known hedge funds
   python main.py test-telegram                          # Test Telegram config
-  python main.py scheduler                              # Run weekly scheduler
+  python main.py insider --days 7                        # Recent insider (Form 4) buys
+
+Telegram credentials are read from the TELEGRAM_TOKEN and TELEGRAM_CHAT_ID
+environment variables (or the --token/--chat-id flags). For unattended
+quarterly runs, schedule `python main.py run` with cron or GitHub Actions.
         """,
     )
 
@@ -667,19 +664,19 @@ Examples:
     subparsers.add_parser("list", help="List all tracked funds")
     subparsers.add_parser("known", help="List known hedge fund CIKs")
     subparsers.add_parser("test-telegram", help="Send a test Telegram message")
-    subparsers.add_parser("scheduler", help="Run the weekly scheduler")
     subparsers.add_parser("report", help="Show detailed changes report for all funds")
     subparsers.add_parser("compare", help="Compare holdings across all tracked funds")
     subparsers.add_parser("full-report", help="Generate full report and send to Telegram")
 
-    d13_parser = subparsers.add_parser("13d", help="Search 13D filings by ticker")
-    d13_parser.add_argument("ticker", nargs="?", help="Ticker symbol to search (optional)")
+    d13_parser = subparsers.add_parser("13d", help="Search 13D/13G filings from tracked funds")
     d13_parser.add_argument("--days", type=int, default=90, help="Days to look back (default: 90)")
 
     insider_parser = subparsers.add_parser("insider", help="Search insider (Form 4) filings")
-    insider_parser.add_argument("ticker", nargs="?", help="Ticker symbol to search (optional)")
     insider_parser.add_argument(
         "--days", type=int, default=30, help="Days to look back (default: 30)"
+    )
+    insider_parser.add_argument(
+        "--limit", type=int, default=50, help="Max S&P 500 companies to scan (default: 50)"
     )
 
     args = parser.parse_args()
@@ -690,11 +687,7 @@ Examples:
 
     if args.command == "run":
         cache = FilingCache(DATA_DIR)
-        notifier = (
-            TelegramNotifier(config.telegram_token, config.telegram_chat_id)
-            if config.telegram_token and config.telegram_chat_id
-            else None
-        )
+        notifier = make_notifier(config)
 
         if not config.tracked_funds:
             print("No funds tracked. Add some first:")
@@ -721,55 +714,28 @@ Examples:
     elif args.command == "test-telegram":
         test_telegram(config)
 
-    elif args.command == "scheduler":
-        if not config.telegram_token or not config.telegram_chat_id:
-            print("❌ Telegram not configured")
-            print("Set with: python main.py --token <TOKEN> --chat-id <CHAT_ID>")
-            return
-        run_scheduler(config)
-
     elif args.command == "report":
-        notifier = (
-            TelegramNotifier(config.telegram_token, config.telegram_chat_id)
-            if config.telegram_token and config.telegram_chat_id
-            else None
-        )
-        show_report(config, notifier)
+        show_report(config, make_notifier(config))
 
     elif args.command == "compare":
-        notifier = (
-            TelegramNotifier(config.telegram_token, config.telegram_chat_id)
-            if config.telegram_token and config.telegram_chat_id
-            else None
-        )
-        compare_funds(config, notifier)
+        compare_funds(config, make_notifier(config))
 
     elif args.command == "full-report":
-        if not config.telegram_token or not config.telegram_chat_id:
+        notifier = make_notifier(config)
+        if notifier is None:
             print("❌ Telegram not configured")
-            print("Set with: python main.py --token <TOKEN> --chat-id <CHAT_ID>")
+            print("Set TELEGRAM_TOKEN and TELEGRAM_CHAT_ID (or use --token/--chat-id)")
             return
-        notifier = TelegramNotifier(config.telegram_token, config.telegram_chat_id)
         notifier.send_message("📊 *Generating FULL REPORT...*")
         show_report(config, notifier)
         compare_funds(config, notifier)
         notifier.send_message("✅ Full report complete!")
 
     elif args.command == "13d":
-        notifier = (
-            TelegramNotifier(config.telegram_token, config.telegram_chat_id)
-            if config.telegram_token and config.telegram_chat_id
-            else None
-        )
-        search_13d(config, args, notifier)
+        search_13d(config, args, make_notifier(config))
 
     elif args.command == "insider":
-        notifier = (
-            TelegramNotifier(config.telegram_token, config.telegram_chat_id)
-            if config.telegram_token and config.telegram_chat_id
-            else None
-        )
-        search_insider(config, args, notifier)
+        search_insider(config, args, make_notifier(config))
 
     else:
         parser.print_help()

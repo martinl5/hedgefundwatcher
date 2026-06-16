@@ -51,7 +51,7 @@ class TelegramNotifier:
             for h in changes.new_positions[:10]:
                 value_str = f"${h.value:,.0f}" if h.value else "$0"
                 shares_str = f"{h.shares:,}" if h.shares else "0"
-                parts.append(f"• {h.name} ({h.ticker}): {shares_str} shares = {value_str}")
+                parts.append(f"• {h.name}: {shares_str} shares = {value_str}")
             if len(changes.new_positions) > 10:
                 parts.append(f"  ... and {len(changes.new_positions) - 10} more")
             parts.append("")
@@ -82,7 +82,7 @@ class TelegramNotifier:
             parts.append("❌ *REMOVED POSITIONS:*")
             for h in changes.removed_positions[:10]:
                 value_str = f"${h.value:,.0f}" if h.value else "$0"
-                parts.append(f"• {h.name} ({h.ticker}): {value_str}")
+                parts.append(f"• {h.name}: {value_str}")
             if len(changes.removed_positions) > 10:
                 parts.append(f"  ... and {len(changes.removed_positions) - 10} more")
             parts.append("")

@@ -4,21 +4,25 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
 
 
 @dataclass
 class Holding:
-    """Represents a single position in a 13F filing."""
+    """Represents a single position in a 13F filing.
 
-    ticker: str
+    13F information tables identify securities by CUSIP, not ticker, so
+    ``cusip`` holds the 6-character CUSIP prefix used to match positions
+    across filings.
+    """
+
+    cusip: str
     name: str
     shares: int
     value: float  # in dollars
 
     def to_dict(self) -> dict:
         return {
-            "ticker": self.ticker,
+            "cusip": self.cusip,
             "name": self.name,
             "shares": self.shares,
             "value": self.value,
@@ -26,8 +30,9 @@ class Holding:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Holding":
+        # Accept the legacy "ticker" key from caches written before the rename.
         return cls(
-            ticker=data.get("ticker", ""),
+            cusip=data.get("cusip", data.get("ticker", "")),
             name=data.get("name", ""),
             shares=int(data.get("shares", 0)),
             value=float(data.get("value", 0)),
@@ -126,16 +131,17 @@ class Config:
         return self
 
     def save(self) -> None:
-        """Persist config to JSON file."""
+        """Persist config to JSON file.
+
+        Only the tracked-fund list is written. Telegram credentials are
+        intentionally never persisted — supply them via the TELEGRAM_TOKEN /
+        TELEGRAM_CHAT_ID environment variables (or the --token/--chat-id flags).
+        """
         os.makedirs(self.data_dir, exist_ok=True)
         config_path = os.path.join(self.data_dir, "config.json")
         with open(config_path, "w") as f:
             json.dump(
-                {
-                    "telegram_token": self.telegram_token,
-                    "telegram_chat_id": self.telegram_chat_id,
-                    "tracked_funds": [fd.to_dict() for fd in self.tracked_funds],
-                },
+                {"tracked_funds": [fd.to_dict() for fd in self.tracked_funds]},
                 f,
                 indent=2,
             )
@@ -204,33 +210,4 @@ class FilingCache:
     def update_filing(self, filing: Filing) -> None:
         """Update the cached filing for a fund and persist."""
         self.cache[filing.cik] = filing
-        self.save()
-
-
-class State:
-    """Application state."""
-
-    def __init__(self, data_dir: str = "data") -> None:
-        self.data_dir = data_dir
-        self.last_run: str | None = None
-        self.load()
-
-    def load(self) -> None:
-        """Load state from JSON file."""
-        state_path = os.path.join(self.data_dir, "state.json")
-        if os.path.exists(state_path):
-            with open(state_path) as f:
-                data = json.load(f)
-                self.last_run = data.get("last_run")
-
-    def save(self) -> None:
-        """Persist state to JSON file."""
-        os.makedirs(self.data_dir, exist_ok=True)
-        state_path = os.path.join(self.data_dir, "state.json")
-        with open(state_path, "w") as f:
-            json.dump({"last_run": self.last_run}, f, indent=2)
-
-    def update_last_run(self) -> None:
-        """Update last run timestamp."""
-        self.last_run = datetime.now().isoformat()
         self.save()
