@@ -1,4 +1,2 @@
 requests
-python-dotenv
 beautifulsoup4
-schedule

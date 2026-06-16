@@ -1,16 +1,29 @@
 {
-  "telegram_token": "YOUR_BOT_TOKEN_HERE",
-  "telegram_chat_id": "YOUR_CHAT_ID_HERE",
   "tracked_funds": [
     {
       "cik": "1649339",
       "name": "Michael Burry (Scion)",
-      "last_filing_date": "2025-11-03"
+      "last_filing_date": null
     },
     {
       "cik": "1350694",
       "name": "Bridgewater Associates",
-      "last_filing_date": "2026-02-13"
+      "last_filing_date": null
+    },
+    {
+      "cik": "1336528",
+      "name": "Pershing Square",
+      "last_filing_date": null
+    },
+    {
+      "cik": "1067983",
+      "name": "Berkshire Hathaway",
+      "last_filing_date": null
+    },
+    {
+      "cik": "1009207",
+      "name": "D.E. Shaw",
+      "last_filing_date": null
     }
   ]
 }

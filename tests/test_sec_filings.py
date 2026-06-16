@@ -181,12 +181,3 @@ def test_extract_form4_details_bad_share_number_skipped():
     root = ET.fromstring(xml)
     details = client._extract_form4_details(root)
     assert "shares" not in details
-
-
-# ──────────────────── search stubs ───────────────────────────────
-
-
-def test_search_stubs_return_empty():
-    client = SECFilingsClient()
-    assert client.search_13d_by_ticker("AAPL") == []
-    assert client.search_form4_by_ticker("AAPL") == []

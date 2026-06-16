@@ -1,0 +1,57 @@
+name: Quarterly 13F Scan
+
+# 13F-HR filings are due ~45 days after each calendar quarter ends, which
+# lands them in mid-February, mid-May, mid-August and mid-November. We run
+# daily through those four months so a new filing is picked up within a day,
+# and stay idle the rest of the year. Runs are idempotent: a fund is only
+# alerted once per filing (tracked via last_filing_date), so the daily cadence
+# does not produce duplicate alerts.
+
+on:
+  schedule:
+    - cron: "0 14 * 2,5,8,11 *"  # 14:00 UTC daily, Feb/May/Aug/Nov
+  workflow_dispatch: {}           # allow manual runs any time
+
+# Don't let a long run overlap with the next scheduled trigger.
+concurrency:
+  group: quarterly-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Persist tracked-fund state (last_filing_date) and the holdings cache
+      # between runs so we don't re-alert filings we've already seen. The cache
+      # is naturally evicted between quarters, which is fine: the first run of a
+      # new window re-seeds from config.json.example and sends the fresh filings.
+      - name: Restore scan state
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: hedgefund-data-${{ github.run_id }}
+          restore-keys: |
+            hedgefund-data-
+
+      - name: Seed fund list if absent
+        run: |
+          if [ ! -f data/config.json ]; then
+            cp data/config.json.example data/config.json
+          fi
+
+      - name: Run 13F scan
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py run

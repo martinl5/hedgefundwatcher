@@ -3,11 +3,10 @@
 import logging
 from xml.etree import ElementTree as ET
 
-import requests
 from bs4 import BeautifulSoup
 
 from models import Filing, Holding
-from sec_base import REQUEST_TIMEOUT, SECBaseClient
+from sec_base import SECBaseClient
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +56,10 @@ class SECClient(SECBaseClient):
 
     def find_holdings_xml_in_folder(self, folder_url: str) -> str | None:
         """Find the holdings XML file URL by scraping a filing folder page."""
-        self._rate_limit()
+        response = self.request(folder_url)
+        if response is None or response.status_code != 200:
+            return None
         try:
-            response = self.session.get(folder_url, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
             soup = BeautifulSoup(response.content, "html.parser")
             for link in soup.find_all("a"):
                 href = link.get("href", "")
@@ -73,9 +72,6 @@ class SECClient(SECBaseClient):
                 ):
                     return href if href.startswith("http") else f"https://www.sec.gov{href}"
             return None
-        except requests.exceptions.RequestException as e:
-            logger.error("Network error finding XML in folder %s: %s", folder_url, e)
-            return None
         except Exception as e:
             logger.error("Error finding XML in folder %s: %s", folder_url, e)
             return None
@@ -84,22 +80,14 @@ class SECClient(SECBaseClient):
         self, url: str, fallback_folder_url: str | None = None
     ) -> str | None:
         """Fetch filing XML content, falling back to folder search if needed."""
-        self._rate_limit()
-        try:
-            response = self.session.get(url, timeout=REQUEST_TIMEOUT)
-            if response.status_code == 200 and len(response.text) > 100:
-                return response.text
-            if fallback_folder_url:
-                xml_url = self.find_holdings_xml_in_folder(fallback_folder_url)
-                if xml_url:
-                    return self.get_filing_content(xml_url)
-            return None
-        except requests.exceptions.RequestException as e:
-            logger.error("Network error fetching filing content from %s: %s", url, e)
-            return None
-        except Exception as e:
-            logger.error("Error fetching filing content from %s: %s", url, e)
-            return None
+        response = self.request(url)
+        if response is not None and response.status_code == 200 and len(response.text) > 100:
+            return response.text
+        if fallback_folder_url:
+            xml_url = self.find_holdings_xml_in_folder(fallback_folder_url)
+            if xml_url:
+                return self.get_filing_content(xml_url)
+        return None
 
     def parse_13f_filing(self, content: str, url: str) -> Filing | None:
         """Parse 13F-HR filing XML into a Filing object."""
@@ -146,7 +134,7 @@ class SECClient(SECBaseClient):
             except (ValueError, TypeError):
                 shares = 0
 
-            holdings.append(Holding(ticker=cusip, name=name, shares=shares, value=value))
+            holdings.append(Holding(cusip=cusip, name=name, shares=shares, value=value))
 
         return Filing(cik="", fund_name="", filing_date="", holdings=holdings)
 
@@ -161,26 +149,26 @@ def compare_filings(
     new_filing: Filing,
 ) -> tuple[list[Holding], list[tuple], list[tuple], list[Holding]]:
     """Compare two filings; return (new, increased, decreased, removed) positions."""
-    old_holdings = {h.ticker: h for h in old_filing.holdings}
-    new_holdings = {h.ticker: h for h in new_filing.holdings}
+    old_holdings = {h.cusip: h for h in old_filing.holdings}
+    new_holdings = {h.cusip: h for h in new_filing.holdings}
 
     new_positions: list[Holding] = []
     increased_positions: list[tuple] = []
     decreased_positions: list[tuple] = []
     removed_positions: list[Holding] = []
 
-    for ticker, new_h in new_holdings.items():
-        if ticker not in old_holdings:
+    for cusip, new_h in new_holdings.items():
+        if cusip not in old_holdings:
             new_positions.append(new_h)
         else:
-            old_h = old_holdings[ticker]
+            old_h = old_holdings[cusip]
             if new_h.value > old_h.value * 1.2:
                 increased_positions.append((old_h, new_h))
             elif new_h.value < old_h.value * 0.8:
                 decreased_positions.append((old_h, new_h))
 
-    for ticker, old_h in old_holdings.items():
-        if ticker not in new_holdings:
+    for cusip, old_h in old_holdings.items():
+        if cusip not in new_holdings:
             removed_positions.append(old_h)
 
     return new_positions, increased_positions, decreased_positions, removed_positions
@@ -201,5 +189,5 @@ HEDGE_FUND_CIKS = {
     "Two Sigma Investments": "0001078013",
     "Point72 Asset Management": "0001552567",
     "Citadel Advisors": "0001146184",
-    "D.E. Shaw": "0001009299",
+    "D.E. Shaw": "0001009207",
 }
