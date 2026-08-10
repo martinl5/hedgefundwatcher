@@ -6,12 +6,15 @@ import os
 import re
 import sys
 
-from models import Config, Filing, FilingCache, HoldingsChange, TrackedFund
+from models import Config, Filing, FilingCache, HoldingsChange, TrackedFund, read_json
 from notifier import TelegramNotifier
 from sec_client import HEDGE_FUND_CIKS, SECClient, compare_filings
 from sec_filings import SECFilingsClient
 
 DATA_DIR = "data"
+# Checked into git and the source of truth for which funds are tracked;
+# data/config.json holds their per-fund state.
+FUND_LIST_PATH = os.path.join(DATA_DIR, "config.json.example")
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,50 @@ def _validate_cik(cik: str) -> str:
     if not re.match(r"^\d{1,10}$", cik):
         raise ValueError(f"Invalid CIK {cik!r}: must be 1–10 digits")
     return cik
+
+
+# Legal-form suffixes carry no identifying information, so they are dropped
+# before comparing a configured fund name against EDGAR's registered one.
+_ENTITY_SUFFIXES = {"llc", "lp", "llp", "inc", "corp", "co", "ltd", "plc", "lc", "l", "p"}
+
+
+def _normalize_entity_name(name: str) -> str:
+    """Reduce a firm name to comparable words: lowercase, no punctuation, no suffixes."""
+    words = re.sub(r"[^a-z0-9\s]", " ", name.lower()).split()
+    return " ".join(w for w in words if w not in _ENTITY_SUFFIXES)
+
+
+def _names_match(configured: str, registered: str) -> bool:
+    """Whether a configured fund name plausibly refers to the EDGAR-registered entity.
+
+    Deliberately loose — this flags CIKs for human review rather than deciding
+    identity. Our labels are nicknames ("Point72"), EDGAR's are legal names
+    ("POINT72 ASSET MANAGEMENT, L.P."), so containment either way counts as a
+    match. Labels of the form "Michael Burry (Scion)" name a person and a firm,
+    and only the firm appears on EDGAR, so each part is also tried on its own.
+    """
+    target = _normalize_entity_name(registered)
+    if not target:
+        return False
+
+    # Try the whole label, then the parenthesised part, then the part outside it.
+    candidates = [
+        configured.replace("(", " ").replace(")", " "),
+        *re.findall(r"\(([^)]*)\)", configured),
+        re.sub(r"\([^)]*\)", " ", configured),
+    ]
+
+    for candidate in candidates:
+        name = _normalize_entity_name(candidate)
+        if not name:
+            continue
+        if name in target or target in name:
+            return True
+        # Token subset catches reorderings and extra qualifiers.
+        tokens, target_tokens = set(name.split()), set(target.split())
+        if tokens <= target_tokens or target_tokens <= tokens:
+            return True
+    return False
 
 
 class OutputHandler:
@@ -189,16 +236,104 @@ def run_scan(
     return results
 
 
-def add_fund(config: Config, name: str, cik: str) -> None:
-    """Add a new fund to track."""
+def add_fund(config: Config, name: str, cik: str, force: bool = False) -> None:
+    """Add a new fund to track, confirming the CIK against EDGAR first.
+
+    A mistyped digit is usually still a valid CIK belonging to some other
+    institutional manager, and the resulting holdings look entirely plausible —
+    so a wrong CIK is only catchable by asking EDGAR who it belongs to.
+    """
     try:
         cik = _validate_cik(cik)
     except ValueError as e:
         print(f"Error: {e}")
         return
-    fund = TrackedFund(cik=cik, name=name)
-    config.add_fund(fund)
+
+    if not force:
+        registered = SECClient().get_fund_name(cik)
+        if not registered:
+            print(f"❌ CIK {cik} could not be resolved on EDGAR — not adding.")
+            print("   Check the number, or pass --force to add it anyway.")
+            return
+        print(f"EDGAR reports CIK {cik} as: {registered}")
+        if not _names_match(name, registered):
+            print(f"⚠️  That doesn't look like '{name}' — adding anyway, but verify it.")
+
+    config.add_fund(TrackedFund(cik=cik, name=name))
     print(f"✓ Added {name} (CIK: {cik}) to tracking list")
+
+
+def sync_funds(config: Config, example_path: str) -> bool:
+    """Reconcile the tracked fund list against the checked-in example file.
+
+    The example file is the source of truth for *which* funds are tracked;
+    config.json holds their state. Funds present in both keep their
+    last_filing_date, so reconciling never re-alerts a filing already seen.
+    """
+    data = read_json(example_path)
+    if not isinstance(data, dict):
+        logger.error("Could not read fund list from %s", example_path)
+        return False
+
+    desired = {f["cik"]: f.get("name", "") for f in data.get("tracked_funds", []) if f.get("cik")}
+    current = {f.cik for f in config.tracked_funds}
+
+    for cik, name in desired.items():
+        if cik not in current:
+            config.add_fund(TrackedFund(cik=cik, name=name))
+            logger.info("  + Added %s (CIK: %s)", name, cik)
+
+    for fund in [f for f in config.tracked_funds if f.cik not in desired]:
+        config.remove_fund(fund.cik)
+        logger.info("  - Removed %s (CIK: %s)", fund.name, fund.cik)
+
+    logger.info("Fund list synced: %d tracked", len(config.tracked_funds))
+    return True
+
+
+def verify_funds(config: Config, known: bool = False) -> bool:
+    """Check CIKs against EDGAR; returns True if every one matches its label.
+
+    Reports the registered name and latest 13F date for each fund, so a CIK
+    pointing at the wrong firm — or at one that has stopped filing — is visible
+    rather than silently producing confident, wrong holdings. With ``known``,
+    checks the built-in HEDGE_FUND_CIKS suggestions instead of the tracked list.
+    """
+    client = SECClient()
+    all_ok = True
+
+    if known:
+        entries = [(cik.lstrip("0"), name) for name, cik in sorted(HEDGE_FUND_CIKS.items())]
+        label = "built-in known-fund"
+    else:
+        entries = [(f.cik, f.name) for f in config.tracked_funds]
+        label = "tracked"
+
+    if not entries:
+        print("No funds to verify.")
+        return True
+
+    print(f"Verifying {len(entries)} {label} CIKs against EDGAR:\n")
+    for cik, name in entries:
+        registered = client.get_fund_name(cik)
+        if not registered:
+            print(f"✗ {cik:>10}  {name:<32} → not found on EDGAR")
+            all_ok = False
+            continue
+
+        latest = client.get_latest_13f_filing(cik)
+        filed = latest.get("filing_date", "?") if latest else "never"
+
+        if _names_match(name, registered):
+            print(f"✓ {cik:>10}  {name:<32} → {registered}  (last 13F: {filed})")
+        else:
+            print(f"✗ {cik:>10}  {name:<32} → {registered}  (last 13F: {filed})")
+            print(f"{'':>13}⚠️  name mismatch — this CIK may be the wrong entity")
+            all_ok = False
+
+    print()
+    print("All CIKs verified." if all_ok else "⚠️  Some CIKs need attention (see ✗ above).")
+    return all_ok
 
 
 def list_funds(config: Config) -> None:
@@ -668,7 +803,17 @@ quarterly runs, schedule `python main.py run` with cron or GitHub Actions.
     add_parser = subparsers.add_parser("add", help="Add a fund to track")
     add_parser.add_argument("name", help="Fund name")
     add_parser.add_argument("cik", help="CIK number")
+    add_parser.add_argument(
+        "--force", action="store_true", help="Add without confirming the CIK against EDGAR"
+    )
 
+    subparsers.add_parser("sync-funds", help="Reconcile tracked funds with data/config.json.example")
+    verify_parser = subparsers.add_parser(
+        "verify-funds", help="Check every tracked CIK against EDGAR"
+    )
+    verify_parser.add_argument(
+        "--known", action="store_true", help="Verify the built-in known-fund list instead"
+    )
     subparsers.add_parser("list", help="List all tracked funds")
     subparsers.add_parser("known", help="List known hedge fund CIKs")
     subparsers.add_parser("test-telegram", help="Send a test Telegram message")
@@ -711,7 +856,15 @@ quarterly runs, schedule `python main.py run` with cron or GitHub Actions.
             print(f"\n✓ Processed {len(results)} funds with new filings")
 
     elif args.command == "add":
-        add_fund(config, args.name, args.cik)
+        add_fund(config, args.name, args.cik, force=args.force)
+
+    elif args.command == "sync-funds":
+        if not sync_funds(config, FUND_LIST_PATH):
+            sys.exit(1)
+
+    elif args.command == "verify-funds":
+        if not verify_funds(config, known=args.known):
+            sys.exit(1)
 
     elif args.command == "list":
         list_funds(config)

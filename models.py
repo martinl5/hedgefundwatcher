@@ -40,7 +40,7 @@ def _write_json_atomic(path: str, payload: Any) -> None:
         raise
 
 
-def _read_json(path: str) -> Any:
+def read_json(path: str) -> Any:
     """Read JSON from ``path``; return None if it is missing or unreadable.
 
     State files live in a directory that survives between runs, so a truncated
@@ -191,7 +191,7 @@ class Config:
 
     def load(self) -> "Config":
         """Load config from JSON file."""
-        data = _read_json(self._config_path)
+        data = read_json(self._config_path)
         if isinstance(data, dict):
             self.telegram_token = data.get("telegram_token", "")
             self.telegram_chat_id = data.get("telegram_chat_id", "")
@@ -260,7 +260,7 @@ class FilingCache:
 
     def load(self) -> None:
         """Load cache from JSON file, discarding it if the schema is outdated."""
-        data = _read_json(self._cache_path)
+        data = read_json(self._cache_path)
         if not isinstance(data, dict):
             return
 

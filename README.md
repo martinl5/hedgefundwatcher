@@ -84,10 +84,36 @@ python main.py insider --days 7
 | `full-report` | Everything → Telegram |
 | `13d` | Search 13D filings from tracked funds |
 | `insider` | Search Form 4 insider filings (S&P 500) |
-| `add "Name" CIK` | Add fund to track |
+| `add "Name" CIK` | Add fund to track (confirms the CIK against EDGAR; `--force` skips) |
+| `sync-funds` | Reconcile tracked funds with `data/config.json.example` |
+| `verify-funds` | Check every tracked CIK against EDGAR (`--known` checks the built-in list) |
 | `list` | Show tracked funds |
 | `known` | List known hedge fund CIKs |
 | `test-telegram` | Test Telegram setup |
+
+### Which funds are tracked
+
+`data/config.json.example` is checked into git and is the source of truth for
+**which** funds are tracked. `data/config.json` is local state — it holds each
+fund's `last_filing_date` and is gitignored.
+
+To change the list, edit `config.json.example` and run `python main.py
+sync-funds`. Funds are added or removed to match, and any fund present in both
+keeps its `last_filing_date`, so syncing never re-alerts a filing you have
+already seen. The scheduled workflow runs this on every scan.
+
+### Verifying CIKs
+
+A mistyped CIK is usually still a *valid* CIK belonging to some other
+institutional manager, so the tool would happily report confident, plausible
+holdings for the wrong firm. `verify-funds` resolves each CIK against EDGAR and
+prints the registered name so mismatches are visible:
+
+```
+✓    1067983  Berkshire Hathaway     → BERKSHIRE HATHAWAY INC     (last 13F: 2026-05-15)
+✗    1146184  Citadel Advisors       → CITADEL SECURITIES LLC     (last 13F: 2026-05-15)
+             ⚠️  name mismatch — this CIK may be the wrong entity
+```
 
 ## Insider Search (Form 4)
 
@@ -210,8 +236,10 @@ hedge_fund_watcher/
 ## Limitations
 
 - SEC's public API doesn't allow ticker-based search (requires authentication)
-- Many hedge funds (Renaissance, Citadel, Two Sigma) don't file 13F publicly
 - 13F has ~45 day delay - shows holdings from ~2 months ago
+- 13F covers long US equity positions only — no shorts, cash, bonds or foreign listings
+- A fund that deregisters stops filing entirely (Scion did so in Nov 2025, and its
+  final 13F was 2025-11-03)
 - Some Form 4 filings don't include transaction shares (options exercises)
 
 ## Add More Funds

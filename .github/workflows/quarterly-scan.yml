@@ -10,7 +10,17 @@ name: Quarterly 13F Scan
 on:
   schedule:
     - cron: "0 14 * 2,5,8,11 *"  # 14:00 UTC daily, Feb/May/Aug/Nov
-  workflow_dispatch: {}           # allow manual runs any time
+  workflow_dispatch:              # allow manual runs any time
+    inputs:
+      command:
+        description: "Which command to run"
+        type: choice
+        default: run
+        options:
+          - run            # scan for new 13F filings and alert
+          - verify-funds   # check every tracked CIK against EDGAR
+          - verify-known   # check the built-in known-fund CIK list
+          - test-telegram  # confirm Telegram delivery works
 
 # Don't let a long run overlap with the next scheduled trigger.
 concurrency:
@@ -35,20 +45,28 @@ jobs:
       # Persist tracked-fund state (last_filing_date) and the holdings cache
       # between runs so we don't re-alert filings we've already seen. The cache
       # is naturally evicted between quarters, which is fine: the first run of a
-      # new window re-seeds from config.json.example and sends the fresh filings.
+      # new window starts from config.json.example and sends the fresh filings.
+      #
+      # Cache the two state files individually, NOT the whole data/ directory.
+      # Caching the directory also captures the git-tracked config.json.example
+      # and restores the stale copy over the one just checked out, so edits to
+      # the fund list would silently never take effect.
       - name: Restore scan state
         uses: actions/cache@v4
         with:
-          path: data
+          path: |
+            data/config.json
+            data/filings_cache.json
           key: hedgefund-data-${{ github.run_id }}
           restore-keys: |
             hedgefund-data-
 
-      - name: Seed fund list if absent
-        run: |
-          if [ ! -f data/config.json ]; then
-            cp data/config.json.example data/config.json
-          fi
+      # Reconcile against the checked-in fund list on every run. A plain
+      # "copy if absent" would never fire, because the restored cache always
+      # contains a config.json — so edits to config.json.example would silently
+      # never reach the scheduled scan.
+      - name: Sync fund list
+        run: python main.py sync-funds
 
       - name: Run 13F scan
         env:
@@ -56,4 +74,8 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           # SEC requires a real contact address; without one they may 403 us.
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
-        run: python main.py run
+        run: |
+          case "${{ inputs.command || 'run' }}" in
+            verify-known) python main.py verify-funds --known ;;
+            *)            python main.py "${{ inputs.command || 'run' }}" ;;
+          esac
