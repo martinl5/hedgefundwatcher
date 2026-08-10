@@ -19,6 +19,7 @@ on:
         options:
           - run            # scan for new 13F filings and alert
           - verify-funds   # check every tracked CIK against EDGAR
+          - verify-known   # check the built-in known-fund CIK list
           - test-telegram  # confirm Telegram delivery works
 
 # Don't let a long run overlap with the next scheduled trigger.
@@ -73,4 +74,8 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           # SEC requires a real contact address; without one they may 403 us.
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
-        run: python main.py ${{ inputs.command || 'run' }}
+        run: |
+          case "${{ inputs.command || 'run' }}" in
+            verify-known) python main.py verify-funds --known ;;
+            *)            python main.py "${{ inputs.command || 'run' }}" ;;
+          esac
