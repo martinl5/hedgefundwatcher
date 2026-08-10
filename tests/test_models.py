@@ -1,8 +1,20 @@
 """Tests for data models."""
 
+import json
+import os
 import tempfile
 
-from models import Config, Filing, FilingCache, Holding, HoldingsChange, TrackedFund
+import pytest
+
+from models import (
+    CACHE_SCHEMA_VERSION,
+    Config,
+    Filing,
+    FilingCache,
+    Holding,
+    HoldingsChange,
+    TrackedFund,
+)
 
 # ──────────────────────────── Holding ────────────────────────────
 
@@ -12,17 +24,40 @@ def test_holding_round_trip():
     assert Holding.from_dict(h.to_dict()) == h
 
 
+def test_holding_round_trip_with_put_and_amount_type():
+    h = Holding(
+        cusip="88160R", name="Tesla", shares=100, value=20000.0,
+        put_call="Put", amount_type="PRN",
+    )
+    assert Holding.from_dict(h.to_dict()) == h
+
+
 def test_holding_from_dict_defaults():
     h = Holding.from_dict({})
     assert h.cusip == ""
     assert h.shares == 0
     assert h.value == 0.0
+    assert h.put_call == ""
+    assert h.amount_type == "SH"
 
 
 def test_holding_from_dict_accepts_legacy_ticker_key():
     # Caches written before the cusip rename used a "ticker" key.
     h = Holding.from_dict({"ticker": "037833", "name": "Apple", "shares": 1, "value": 2.0})
     assert h.cusip == "037833"
+
+
+def test_holding_key_distinguishes_puts_and_principal():
+    common = Holding("88160R", "Tesla", 100, 1.0)
+    put = Holding("88160R", "Tesla", 100, 1.0, put_call="Put")
+    prn = Holding("88160R", "Tesla", 100, 1.0, amount_type="PRN")
+    assert common.key != put.key
+    assert common.key != prn.key
+
+
+def test_holding_display_name_labels_derivatives():
+    assert Holding("037833", "Apple Inc", 1, 1.0).display_name == "Apple Inc"
+    assert Holding("88160R", "Tesla", 1, 1.0, put_call="Put").display_name == "Tesla (PUT)"
 
 
 # ──────────────────────────── Filing ─────────────────────────────
@@ -165,3 +200,92 @@ def test_filing_cache_persists_across_instances():
 
         cache2 = FilingCache(tmpdir)
         assert cache2.get_last_filing("42") is not None
+
+
+def test_filing_cache_writes_schema_version():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cache = FilingCache(tmpdir)
+        cache.update_filing(Filing(cik="42", fund_name="X", filing_date="2024-06-01", holdings=[]))
+        with open(os.path.join(tmpdir, "filings_cache.json")) as f:
+            raw = json.load(f)
+        assert raw["schema_version"] == CACHE_SCHEMA_VERSION
+        assert "42" in raw["filings"]
+
+
+def test_filing_cache_discards_legacy_v1_file():
+    # v1 caches predate row aggregation and put/common separation, so diffing
+    # against them would manufacture false changes — they must be dropped.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        legacy = {
+            "42": {
+                "cik": "42",
+                "fund_name": "Pershing",
+                "filing_date": "2024-06-01",
+                "holdings": [{"cusip": "037833", "name": "Apple", "shares": 1, "value": 2.0}],
+            }
+        }
+        with open(os.path.join(tmpdir, "filings_cache.json"), "w") as f:
+            json.dump(legacy, f)
+
+        cache = FilingCache(tmpdir)
+        assert cache.get_last_filing("42") is None
+
+
+# ─────────────────────── state file robustness ───────────────────
+
+
+def test_corrupt_cache_file_loads_as_empty():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with open(os.path.join(tmpdir, "filings_cache.json"), "w") as f:
+            f.write('{"schema_version": 2, "filings": {"42": ')  # truncated mid-write
+        cache = FilingCache(tmpdir)
+        assert cache.cache == {}
+
+
+def test_corrupt_config_file_loads_as_empty():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with open(os.path.join(tmpdir, "config.json"), "w") as f:
+            f.write('{"tracked_funds": [')
+        cfg = Config()
+        cfg.data_dir = tmpdir
+        cfg.load()
+        assert cfg.tracked_funds == []
+
+
+def test_failed_write_preserves_previous_file_and_cleans_up():
+    # The point of the atomic write: a crash mid-serialisation must not leave a
+    # truncated file behind, because the workflow caches data/ between runs.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = Config()
+        cfg.data_dir = tmpdir
+        cfg.tracked_funds = [TrackedFund(cik="1", name="Good")]
+        cfg.save()
+
+        class Unserialisable:
+            """Fails inside json.dump, i.e. partway through writing the temp file."""
+
+            def to_dict(self):
+                return {"cik": object()}
+
+        cfg.tracked_funds = [Unserialisable()]
+        with pytest.raises(TypeError):
+            cfg.save()
+
+        # Old contents intact, no partial file left over.
+        reloaded = Config()
+        reloaded.data_dir = tmpdir
+        reloaded.load()
+        assert [f.name for f in reloaded.tracked_funds] == ["Good"]
+        assert os.listdir(tmpdir) == ["config.json"]
+
+
+def test_saves_leave_no_temp_files_behind():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = Config()
+        cfg.data_dir = tmpdir
+        cfg.tracked_funds = [TrackedFund(cik="1", name="A")]
+        cfg.save()
+        FilingCache(tmpdir).update_filing(
+            Filing(cik="1", fund_name="A", filing_date="2024-01-01", holdings=[])
+        )
+        assert sorted(os.listdir(tmpdir)) == ["config.json", "filings_cache.json"]

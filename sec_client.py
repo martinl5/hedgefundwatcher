@@ -10,6 +10,30 @@ from sec_base import SECBaseClient
 
 logger = logging.getLogger(__name__)
 
+# A position must move by more than this fraction of its share count to be
+# reported as an add or a trim.
+CHANGE_THRESHOLD = 0.2
+# Positions smaller than this (in dollars, either side) are ignored when
+# classifying changes — rounding noise on token stakes isn't worth an alert.
+MIN_POSITION_VALUE = 100_000
+
+
+def _to_int(element: ET.Element | None) -> int:
+    """Return an element's text as an int, or 0 when absent or non-numeric."""
+    if element is None or not element.text:
+        return 0
+    try:
+        return int(element.text.strip())
+    except (ValueError, TypeError):
+        return 0
+
+
+def _text(element: ET.Element | None, default: str = "") -> str:
+    """Return an element's stripped text, or ``default`` when absent."""
+    if element is None or not element.text:
+        return default
+    return element.text.strip()
+
 
 class SECClient(SECBaseClient):
     """Client for interacting with SEC EDGAR — 13F filings."""
@@ -98,45 +122,36 @@ class SECClient(SECBaseClient):
             return None
 
         ns = {"ns": "http://www.sec.gov/edgar/document/thirteenf/informationtable"}
-        holdings: list[Holding] = []
+
+        # A 13F lists a security once per investment-discretion bucket and
+        # sub-manager, so one position routinely spans several infoTable rows.
+        # Sum them into a single holding instead of letting later rows shadow
+        # earlier ones, which would understate the position.
+        aggregated: dict[tuple[str, str, str], Holding] = {}
 
         for info_table in root.findall(".//ns:infoTable", ns):
             name_el = info_table.find("ns:nameOfIssuer", ns)
-            cusip_el = info_table.find("ns:cusip", ns)
-            value_el = info_table.find("ns:value", ns)
-            shares_el = info_table.find("ns:shrsOrPrnAmt/ns:sshPrnamt", ns)
-
             if name_el is None or not name_el.text:
                 continue
 
-            name = name_el.text
-            cusip = (
-                cusip_el.text[:6]
-                if (cusip_el is not None and cusip_el.text)
-                else "UNKNOWN"
+            cusip = _text(info_table.find("ns:cusip", ns))[:6] or "UNKNOWN"
+            holding = Holding(
+                cusip=cusip,
+                name=name_el.text,
+                shares=_to_int(info_table.find("ns:shrsOrPrnAmt/ns:sshPrnamt", ns)),
+                value=_to_int(info_table.find("ns:value", ns)),
+                put_call=_text(info_table.find("ns:putCall", ns)),
+                amount_type=_text(info_table.find("ns:shrsOrPrnAmt/ns:sshPrnamtType", ns), "SH"),
             )
 
-            try:
-                value = (
-                    int(value_el.text)
-                    if (value_el is not None and value_el.text)
-                    else 0
-                )
-            except (ValueError, TypeError):
-                value = 0
+            existing = aggregated.get(holding.key)
+            if existing is None:
+                aggregated[holding.key] = holding
+            else:
+                existing.shares += holding.shares
+                existing.value += holding.value
 
-            try:
-                shares = (
-                    int(shares_el.text)
-                    if (shares_el is not None and shares_el.text)
-                    else 0
-                )
-            except (ValueError, TypeError):
-                shares = 0
-
-            holdings.append(Holding(cusip=cusip, name=name, shares=shares, value=value))
-
-        return Filing(cik="", fund_name="", filing_date="", holdings=holdings)
+        return Filing(cik="", fund_name="", filing_date="", holdings=list(aggregated.values()))
 
     def get_fund_name(self, cik: str) -> str | None:
         """Return the fund/company name for a CIK."""
@@ -144,31 +159,73 @@ class SECClient(SECBaseClient):
         return submissions.get("name", "") if submissions else None
 
 
+def _looks_like_split(old: Holding, new: Holding) -> bool:
+    """Heuristic: did a share-count change come from a split rather than a trade?
+
+    A forward or reverse split multiplies the share count by a near-integer
+    factor while leaving the position's market value essentially untouched.
+    A genuine doubling of a position moves value roughly in step with shares,
+    and that is what separates the two cases. Only near-integer factors are
+    recognised, so unusual ratios (a 3-for-2, say) still read as trades.
+    """
+    if old.shares <= 0 or new.shares <= 0 or old.value <= 0 or new.value <= 0:
+        return False
+
+    share_ratio = new.shares / old.shares
+    # Invert reverse splits so both directions are checked against the same band.
+    factor = share_ratio if share_ratio >= 1 else 1 / share_ratio
+    nearest = round(factor)
+    if nearest < 2 or abs(factor - nearest) / nearest > 0.05:
+        return False
+
+    value_ratio = new.value / old.value
+    return 0.75 <= value_ratio <= 1.35
+
+
 def compare_filings(
     old_filing: Filing,
     new_filing: Filing,
 ) -> tuple[list[Holding], list[tuple], list[tuple], list[Holding]]:
-    """Compare two filings; return (new, increased, decreased, removed) positions."""
-    old_holdings = {h.cusip: h for h in old_filing.holdings}
-    new_holdings = {h.cusip: h for h in new_filing.holdings}
+    """Compare two filings; return (new, increased, decreased, removed) positions.
+
+    Increases and decreases are measured on **share count**, not market value.
+    A 13F's ``value`` is the position's market value at quarter end, so diffing
+    it would report a fund that never traded as having bought whenever the
+    stock rallied — and would hide a real trim behind a rising price. Share
+    counts move only when the fund actually trades (or the issuer splits, which
+    ``_looks_like_split`` filters out).
+    """
+    old_holdings = {h.key: h for h in old_filing.holdings}
+    new_holdings = {h.key: h for h in new_filing.holdings}
 
     new_positions: list[Holding] = []
     increased_positions: list[tuple] = []
     decreased_positions: list[tuple] = []
     removed_positions: list[Holding] = []
 
-    for cusip, new_h in new_holdings.items():
-        if cusip not in old_holdings:
+    for key, new_h in new_holdings.items():
+        old_h = old_holdings.get(key)
+        if old_h is None:
             new_positions.append(new_h)
-        else:
-            old_h = old_holdings[cusip]
-            if new_h.value > old_h.value * 1.2:
-                increased_positions.append((old_h, new_h))
-            elif new_h.value < old_h.value * 0.8:
-                decreased_positions.append((old_h, new_h))
+            continue
 
-    for cusip, old_h in old_holdings.items():
-        if cusip not in new_holdings:
+        if max(old_h.value, new_h.value) < MIN_POSITION_VALUE:
+            continue
+
+        if _looks_like_split(old_h, new_h):
+            logger.debug(
+                "Treating %s share change (%d → %d) as a split, not a trade",
+                new_h.display_name, old_h.shares, new_h.shares,
+            )
+            continue
+
+        if new_h.shares > old_h.shares * (1 + CHANGE_THRESHOLD):
+            increased_positions.append((old_h, new_h))
+        elif new_h.shares < old_h.shares * (1 - CHANGE_THRESHOLD):
+            decreased_positions.append((old_h, new_h))
+
+    for key, old_h in old_holdings.items():
+        if key not in new_holdings:
             removed_positions.append(old_h)
 
     return new_positions, increased_positions, decreased_positions, removed_positions
