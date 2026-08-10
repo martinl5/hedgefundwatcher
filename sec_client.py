@@ -231,20 +231,26 @@ def compare_filings(
     return new_positions, increased_positions, decreased_positions, removed_positions
 
 
-# Popular hedge fund CIKs that actually file 13F
+# Suggestions offered by the `known` command. Every entry below was confirmed
+# against EDGAR's submissions API on 2026-08-10 — the name in the comment is the
+# registered name that CIK resolves to.
+#
+# Keep it that way. An earlier version of this list had ten wrong CIKs, and the
+# failure mode is silent: a wrong CIK usually still resolves to *some*
+# institutional manager filing on the same quarterly schedule, so the tool
+# reports confident, plausible holdings for the wrong firm and nothing looks
+# broken. "Two Sigma" pointed at Great Lakes Advisors, an unrelated active 13F
+# filer, and "Point72" pointed at a private individual.
+#
+# Re-check with: python main.py verify-funds --known
 HEDGE_FUND_CIKS = {
-    "Michael Burry (Scion)": "0001649339",
-    "Cathie Wood (ARK Invest)": "0001618652",
-    "Bill Ackman (Pershing Square)": "0001336528",
-    "David Tepper (Appaloosa)": "0001022315",
-    "Soros Fund Management": "0001069355",
-    "Leon Black (Apollo)": "0001508217",
-    "Daniel Loeb (Third Point)": "0001066299",
-    "John Paulson": "0001393535",
-    "Renaissance Technologies": "0001037029",
-    "Bridgewater Associates": "0001350694",
-    "Two Sigma Investments": "0001078013",
-    "Point72 Asset Management": "0001552567",
-    "Citadel Advisors": "0001146184",
-    "D.E. Shaw": "0001009207",
+    "Berkshire Hathaway": "0001067983",  # BERKSHIRE HATHAWAY INC
+    "Bridgewater Associates": "0001350694",  # Bridgewater Associates, LP
+    "Citadel Advisors": "0001423053",  # CITADEL ADVISORS LLC
+    "D.E. Shaw": "0001009207",  # D. E. Shaw & Co., Inc.
+    "Pershing Square": "0001336528",  # Pershing Square Capital Management, L.P.
+    "Point72 Asset Management": "0001603466",  # Point72 Asset Management, L.P.
+    "Renaissance Technologies": "0001037389",  # RENAISSANCE TECHNOLOGIES LLC
+    "Susquehanna International Group": "0001446194",  # SUSQUEHANNA INTERNATIONAL GROUP, LLP
+    "Two Sigma Investments": "0001179392",  # TWO SIGMA INVESTMENTS, LP
 }

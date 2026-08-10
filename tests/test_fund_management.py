@@ -7,6 +7,28 @@ from unittest.mock import patch
 
 from main import _names_match, add_fund, sync_funds, verify_funds
 from models import Config, TrackedFund
+from sec_client import HEDGE_FUND_CIKS
+
+# ────────────────────── known-fund suggestions ───────────────────
+
+
+def test_known_fund_ciks_are_well_formed():
+    for name, cik in HEDGE_FUND_CIKS.items():
+        assert cik.isdigit() and len(cik) == 10, f"{name} has malformed CIK {cik!r}"
+
+
+def test_known_fund_ciks_are_unique():
+    # Two labels sharing a CIK means at least one of them is the wrong entity.
+    assert len(set(HEDGE_FUND_CIKS.values())) == len(HEDGE_FUND_CIKS)
+
+
+def test_known_fund_ciks_exclude_retired_wrong_entries():
+    # Regression guard for the audit: these CIKs resolved to unrelated entities
+    # (Citadel Securities, Great Lakes Advisors, a private individual, 404s).
+    retired = {"0001146184", "0001078013", "0001552567", "0001037029",
+               "0001618652", "0001066299", "0001022315", "0001393535",
+               "0001508217", "0001069355"}
+    assert not (set(HEDGE_FUND_CIKS.values()) & retired)
 
 # ─────────────────────── name matching ───────────────────────────
 
