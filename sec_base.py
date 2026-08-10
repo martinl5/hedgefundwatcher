@@ -1,6 +1,7 @@
 """Shared SEC EDGAR client base: rate limiting, CIK padding, and submissions fetch."""
 
 import logging
+import os
 import time
 
 import requests
@@ -10,6 +11,25 @@ logger = logging.getLogger(__name__)
 REQUEST_TIMEOUT = 15  # seconds — prevents hanging on slow SEC responses
 MAX_RETRIES = 3  # transient SEC errors (429/5xx/timeouts) are common; retry before giving up
 BACKOFF_BASE = 2.0  # seconds; doubled each retry (2s, 4s, 8s)
+FALLBACK_USER_AGENT = "HedgeFundWatcher/1.0 (contact@example.com)"
+
+
+def _user_agent() -> str:
+    """Return the User-Agent to send to SEC, warning if it isn't personalised.
+
+    SEC's fair-access policy requires requests to declare a real contact
+    address and serves HTTP 403 to clients that don't, so the placeholder
+    below is a last resort rather than a working default.
+    """
+    configured = os.environ.get("SEC_USER_AGENT", "").strip()
+    if configured:
+        return configured
+    logger.warning(
+        "SEC_USER_AGENT is not set — falling back to a placeholder contact address. "
+        "SEC may reject these requests with HTTP 403; set SEC_USER_AGENT to something "
+        "like 'HedgeFundWatcher/1.0 (you@example.com)'."
+    )
+    return FALLBACK_USER_AGENT
 
 
 class SECBaseClient:
@@ -22,7 +42,7 @@ class SECBaseClient:
     def __init__(self) -> None:
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "HedgeFundWatcher/1.0 (contact@example.com)",
+            "User-Agent": _user_agent(),
             "Accept": "application/json",
             "Accept-Encoding": "gzip, deflate",
         })

@@ -91,6 +91,11 @@ def setup_config(args: argparse.Namespace) -> Config:
         args.telegram_chat_id or os.environ.get("TELEGRAM_CHAT_ID") or config.telegram_chat_id
     )
 
+    # Surface misconfiguration up front rather than at send time. Warn-only:
+    # one malformed CIK shouldn't abort a scan over the other tracked funds.
+    for error in config.validate():
+        logger.warning("Config: %s", error)
+
     return config
 
 
@@ -288,32 +293,33 @@ def show_report(config: Config, notifier: TelegramNotifier | None = None) -> lis
             if changes.new_positions:
                 out.add(f"\n🆕 *NEW ({len(changes.new_positions)}):*")
                 for h in sorted(changes.new_positions, key=lambda x: x.value, reverse=True)[:8]:
-                    out.add(f"• {h.name}: ${h.value / 1_000_000:.1f}M")
+                    out.add(f"• {h.display_name}: ${h.value / 1_000_000:.1f}M")
 
+            # Changes are ranked by share delta, matching how they were detected.
             if changes.increased_positions:
                 out.add(f"\n📈 *INCREASED ({len(changes.increased_positions)}):*")
                 for old_h, new_h in sorted(
                     changes.increased_positions,
-                    key=lambda x: x[1].value - x[0].value,
+                    key=lambda x: x[1].shares - x[0].shares,
                     reverse=True,
                 )[:5]:
-                    pct = ((new_h.value - old_h.value) / old_h.value) * 100 if old_h.value else 0
+                    pct = ((new_h.shares - old_h.shares) / old_h.shares) * 100 if old_h.shares else 0
                     out.add(
-                        f"• {new_h.name}: ${old_h.value / 1_000_000:.1f}M"
-                        f" → ${new_h.value / 1_000_000:.1f}M (+{pct:.0f}%)"
+                        f"• {new_h.display_name}: {old_h.shares:,} → {new_h.shares:,} shares"
+                        f" (+{pct:.0f}%) | now ${new_h.value / 1_000_000:.1f}M"
                     )
 
             if changes.decreased_positions:
                 out.add(f"\n📉 *DECREASED ({len(changes.decreased_positions)}):*")
                 for old_h, new_h in sorted(
                     changes.decreased_positions,
-                    key=lambda x: x[0].value - x[1].value,
+                    key=lambda x: x[0].shares - x[1].shares,
                     reverse=True,
                 )[:5]:
-                    pct = ((old_h.value - new_h.value) / old_h.value) * 100 if old_h.value else 0
+                    pct = ((old_h.shares - new_h.shares) / old_h.shares) * 100 if old_h.shares else 0
                     out.add(
-                        f"• {new_h.name}: ${old_h.value / 1_000_000:.1f}M"
-                        f" → ${new_h.value / 1_000_000:.1f}M (-{pct:.0f}%)"
+                        f"• {new_h.display_name}: {old_h.shares:,} → {new_h.shares:,} shares"
+                        f" (-{pct:.0f}%) | now ${new_h.value / 1_000_000:.1f}M"
                     )
 
             if changes.removed_positions:
@@ -321,7 +327,7 @@ def show_report(config: Config, notifier: TelegramNotifier | None = None) -> lis
                 for h in sorted(changes.removed_positions, key=lambda x: x.value, reverse=True)[
                     :5
                 ]:
-                    out.add(f"• {h.name}: ${h.value / 1_000_000:.1f}M")
+                    out.add(f"• {h.display_name}: ${h.value / 1_000_000:.1f}M")
 
             if not changes.has_changes():
                 out.add("\n✓ No significant changes")
@@ -374,8 +380,10 @@ def compare_funds(
                 out.add("  ❌ Could not parse holdings")
                 continue
 
+            # Keyed on display_name so a fund's puts stay distinct from its
+            # common-stock position in the same issuer.
             holdings_dict = {
-                h.name.upper().strip(): {
+                h.display_name.upper().strip(): {
                     "cusip": h.cusip,
                     "name": h.name,
                     "value": h.value,

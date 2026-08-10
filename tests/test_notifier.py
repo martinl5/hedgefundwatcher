@@ -99,6 +99,30 @@ def test_alert_decreased_position_shows_percentage():
     assert "60.0%" in msg
 
 
+def test_alert_change_line_reports_share_counts():
+    # The percentage is computed from shares, so the shares must be shown —
+    # otherwise a rising price makes an "INCREASED" line look self-contradictory.
+    old_h = Holding("AAPL", "Apple Inc", 100, 10_000)
+    new_h = Holding("AAPL", "Apple Inc", 150, 15_000)
+    msg = _capture_alert(_alert_with_changes(increased_positions=[(old_h, new_h)]))
+    assert "100 → 150 shares" in msg
+
+
+def test_alert_change_percentage_tracks_shares_not_value():
+    # Shares +50%, value +150% (price rallied). The reported figure is +50%.
+    old_h = Holding("AAPL", "Apple Inc", 100, 10_000)
+    new_h = Holding("AAPL", "Apple Inc", 150, 25_000)
+    msg = _capture_alert(_alert_with_changes(increased_positions=[(old_h, new_h)]))
+    assert "+50.0%" in msg
+    assert "150.0%" not in msg
+
+
+def test_alert_labels_put_positions():
+    h = Holding("88160R", "Tesla Inc", 4000, 900_000, put_call="Put")
+    msg = _capture_alert(_alert_with_changes(new_positions=[h]))
+    assert "Tesla Inc (PUT)" in msg
+
+
 def test_alert_removed_position_appears_in_message():
     h = Holding("TSLA", "Tesla Inc", 500, 100_000)
     changes = _alert_with_changes(removed_positions=[h])

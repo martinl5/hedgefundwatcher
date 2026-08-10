@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Exercises the shapes a real 13F takes that a naive one-row-per-position
+  parser gets wrong:
+    * APPLE INC   — one position split across three infoTable rows (different
+                    investment discretion / managers). Must sum to 60,000
+                    shares and $12,000,000.
+    * TESLA INC   — a put and the common stock share a CUSIP prefix. Must stay
+                    two separate positions.
+    * US TREASURY — reported as a principal amount (PRN), not shares. Must not
+                    merge with any SH-denominated row.
+-->
+<informationTable xmlns="http://www.sec.gov/edgar/document/thirteenf/informationtable">
+  <infoTable>
+    <nameOfIssuer>APPLE INC</nameOfIssuer>
+    <titleOfClass>COM</titleOfClass>
+    <cusip>037833100</cusip>
+    <value>5000000</value>
+    <shrsOrPrnAmt>
+      <sshPrnamt>25000</sshPrnamt>
+      <sshPrnamtType>SH</sshPrnamtType>
+    </shrsOrPrnAmt>
+    <investmentDiscretion>SOLE</investmentDiscretion>
+  </infoTable>
+  <infoTable>
+    <nameOfIssuer>APPLE INC</nameOfIssuer>
+    <titleOfClass>COM</titleOfClass>
+    <cusip>037833100</cusip>
+    <value>4000000</value>
+    <shrsOrPrnAmt>
+      <sshPrnamt>20000</sshPrnamt>
+      <sshPrnamtType>SH</sshPrnamtType>
+    </shrsOrPrnAmt>
+    <investmentDiscretion>DEFINED</investmentDiscretion>
+  </infoTable>
+  <infoTable>
+    <nameOfIssuer>APPLE INC</nameOfIssuer>
+    <titleOfClass>COM</titleOfClass>
+    <cusip>037833100</cusip>
+    <value>3000000</value>
+    <shrsOrPrnAmt>
+      <sshPrnamt>15000</sshPrnamt>
+      <sshPrnamtType>SH</sshPrnamtType>
+    </shrsOrPrnAmt>
+    <investmentDiscretion>SHARED</investmentDiscretion>
+  </infoTable>
+  <infoTable>
+    <nameOfIssuer>TESLA INC</nameOfIssuer>
+    <titleOfClass>COM</titleOfClass>
+    <cusip>88160R101</cusip>
+    <value>2000000</value>
+    <shrsOrPrnAmt>
+      <sshPrnamt>10000</sshPrnamt>
+      <sshPrnamtType>SH</sshPrnamtType>
+    </shrsOrPrnAmt>
+    <investmentDiscretion>SOLE</investmentDiscretion>
+  </infoTable>
+  <infoTable>
+    <nameOfIssuer>TESLA INC</nameOfIssuer>
+    <titleOfClass>COM</titleOfClass>
+    <cusip>88160R101</cusip>
+    <value>900000</value>
+    <shrsOrPrnAmt>
+      <sshPrnamt>4000</sshPrnamt>
+      <sshPrnamtType>SH</sshPrnamtType>
+    </shrsOrPrnAmt>
+    <putCall>Put</putCall>
+    <investmentDiscretion>SOLE</investmentDiscretion>
+  </infoTable>
+  <infoTable>
+    <nameOfIssuer>US TREASURY NOTE</nameOfIssuer>
+    <titleOfClass>NOTE</titleOfClass>
+    <cusip>91282CAB1</cusip>
+    <value>1500000</value>
+    <shrsOrPrnAmt>
+      <sshPrnamt>1500000</sshPrnamt>
+      <sshPrnamtType>PRN</sshPrnamtType>
+    </shrsOrPrnAmt>
+    <investmentDiscretion>SOLE</investmentDiscretion>
+  </infoTable>
+</informationTable>

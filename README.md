@@ -32,6 +32,13 @@ export TELEGRAM_CHAT_ID="YOUR_CHAT_ID"
 Or pass them per-command with `--token` / `--chat-id`. The local
 `data/config.json` only stores the tracked-fund list, not secrets.
 
+Also set a contact address for SEC. Their fair-access policy requires every
+request to identify itself, and they serve HTTP 403 to clients that don't:
+
+```bash
+export SEC_USER_AGENT="HedgeFundWatcher/1.0 (you@example.com)"
+```
+
 ### 3. Add Funds to Track
 
 ```bash
@@ -139,10 +146,11 @@ that runs `main.py run` daily during those four months and stays idle otherwise.
 Runs are idempotent — each filing is alerted only once (tracked via
 `last_filing_date`) — so the daily cadence never produces duplicate alerts.
 
-To enable it, add two repository secrets:
+To enable it, add these repository secrets:
 
 - `TELEGRAM_TOKEN`
 - `TELEGRAM_CHAT_ID`
+- `SEC_USER_AGENT` — your contact address, e.g. `HedgeFundWatcher/1.0 (you@example.com)`
 
 You can also trigger it manually from the Actions tab (`workflow_dispatch`).
 
@@ -163,6 +171,25 @@ at 9:30 AM:
 | **13F-HR** | Quarterly holdings (>$100M) | ~45 days after quarter |
 | **13D/G** | Beneficial ownership (>5%) | When ownership crosses threshold |
 | **Form 4** | Insider transactions | Within 3 business days |
+
+### What counts as a change
+
+Position increases and decreases are measured on **share count**, not dollar
+value. A 13F's `value` field is the position's market value at quarter end, so
+a fund that never traded would otherwise show up as buying whenever its stocks
+rallied — and a real sale would be hidden behind a rising price. Alerts fire
+when share count moves more than 20%.
+
+Two related details:
+
+- A security is usually listed across several `infoTable` rows (one per
+  investment-discretion bucket or sub-manager). Those rows are summed into a
+  single position.
+- Puts and calls are tracked separately from the underlying common stock, even
+  though they share a CUSIP — a new put is a bearish bet, not a bigger stake.
+- Stock splits change the share count without any trade, so a near-integer
+  share ratio paired with roughly unchanged value is treated as a split and
+  not reported.
 
 ## Files
 

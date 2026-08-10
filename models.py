@@ -1,9 +1,59 @@
 """Data models for HedgeFundWatcher."""
 
+import contextlib
 import json
+import logging
 import os
 import re
+import tempfile
 from dataclasses import dataclass, field
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# Bumped whenever the on-disk holdings format changes in a way that makes older
+# cached filings unsafe to diff against freshly parsed ones.
+CACHE_SCHEMA_VERSION = 2
+
+
+def _write_json_atomic(path: str, payload: Any) -> None:
+    """Serialise ``payload`` to ``path`` atomically.
+
+    Writes to a temporary file in the same directory, fsyncs it, then renames
+    over the target, so a crash mid-write leaves the previous file intact
+    rather than a truncated one. That matters because the quarterly workflow
+    restores ``data/`` from an Actions cache — a corrupt file would otherwise
+    be cached and break every subsequent run.
+    """
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(payload, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+
+
+def _read_json(path: str) -> Any:
+    """Read JSON from ``path``; return None if it is missing or unreadable.
+
+    State files live in a directory that survives between runs, so a truncated
+    or hand-edited file should degrade to "no state" rather than crash the CLI.
+    """
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error("Ignoring unreadable state file %s: %s", path, e)
+        return None
 
 
 @dataclass
@@ -12,13 +62,27 @@ class Holding:
 
     13F information tables identify securities by CUSIP, not ticker, so
     ``cusip`` holds the 6-character CUSIP prefix used to match positions
-    across filings.
+    across filings. CUSIP alone is not an identity, though: a put and the
+    underlying common stock share one, and share counts cannot be compared
+    with principal amounts — hence ``put_call`` and ``amount_type``.
     """
 
     cusip: str
     name: str
     shares: int
     value: float  # in dollars
+    put_call: str = ""  # "Put" / "Call"; empty for common stock
+    amount_type: str = "SH"  # SH (share count) or PRN (principal amount)
+
+    @property
+    def key(self) -> tuple[str, str, str]:
+        """The identity used to match this position across filings."""
+        return (self.cusip, self.put_call.upper(), self.amount_type.upper())
+
+    @property
+    def display_name(self) -> str:
+        """Issuer name, tagged with the derivative type when there is one."""
+        return f"{self.name} ({self.put_call.upper()})" if self.put_call else self.name
 
     def to_dict(self) -> dict:
         return {
@@ -26,6 +90,8 @@ class Holding:
             "name": self.name,
             "shares": self.shares,
             "value": self.value,
+            "put_call": self.put_call,
+            "amount_type": self.amount_type,
         }
 
     @classmethod
@@ -36,6 +102,8 @@ class Holding:
             name=data.get("name", ""),
             shares=int(data.get("shares", 0)),
             value=float(data.get("value", 0)),
+            put_call=data.get("put_call", ""),
+            amount_type=data.get("amount_type", "SH"),
         )
 
 
@@ -117,17 +185,19 @@ class Config:
         self.tracked_funds: list[TrackedFund] = []
         self.data_dir = "data"
 
+    @property
+    def _config_path(self) -> str:
+        return os.path.join(self.data_dir, "config.json")
+
     def load(self) -> "Config":
         """Load config from JSON file."""
-        config_path = os.path.join(self.data_dir, "config.json")
-        if os.path.exists(config_path):
-            with open(config_path) as f:
-                data = json.load(f)
-                self.telegram_token = data.get("telegram_token", "")
-                self.telegram_chat_id = data.get("telegram_chat_id", "")
-                self.tracked_funds = [
-                    TrackedFund.from_dict(fd) for fd in data.get("tracked_funds", [])
-                ]
+        data = _read_json(self._config_path)
+        if isinstance(data, dict):
+            self.telegram_token = data.get("telegram_token", "")
+            self.telegram_chat_id = data.get("telegram_chat_id", "")
+            self.tracked_funds = [
+                TrackedFund.from_dict(fd) for fd in data.get("tracked_funds", [])
+            ]
         return self
 
     def save(self) -> None:
@@ -137,14 +207,10 @@ class Config:
         intentionally never persisted — supply them via the TELEGRAM_TOKEN /
         TELEGRAM_CHAT_ID environment variables (or the --token/--chat-id flags).
         """
-        os.makedirs(self.data_dir, exist_ok=True)
-        config_path = os.path.join(self.data_dir, "config.json")
-        with open(config_path, "w") as f:
-            json.dump(
-                {"tracked_funds": [fd.to_dict() for fd in self.tracked_funds]},
-                f,
-                indent=2,
-            )
+        _write_json_atomic(
+            self._config_path,
+            {"tracked_funds": [fd.to_dict() for fd in self.tracked_funds]},
+        )
 
     def validate(self) -> list[str]:
         """Return a list of validation error strings (empty = valid)."""
@@ -188,20 +254,41 @@ class FilingCache:
         self.cache: dict[str, Filing] = {}
         self.load()
 
+    @property
+    def _cache_path(self) -> str:
+        return os.path.join(self.data_dir, "filings_cache.json")
+
     def load(self) -> None:
-        """Load cache from JSON file."""
-        cache_path = os.path.join(self.data_dir, "filings_cache.json")
-        if os.path.exists(cache_path):
-            with open(cache_path) as f:
-                data = json.load(f)
-                self.cache = {k: Filing.from_dict(v) for k, v in data.items()}
+        """Load cache from JSON file, discarding it if the schema is outdated."""
+        data = _read_json(self._cache_path)
+        if not isinstance(data, dict):
+            return
+
+        version = data.get("schema_version")
+        if version != CACHE_SCHEMA_VERSION:
+            # v1 caches were written before duplicate infoTable rows were summed
+            # and before puts were separated from common stock, so diffing against
+            # them would manufacture exactly the false alerts this schema fixes.
+            logger.warning(
+                "Filings cache is schema v%s (expected v%s); discarding it and taking a "
+                "fresh baseline. The next scan reports current holdings rather than changes.",
+                version or 1,
+                CACHE_SCHEMA_VERSION,
+            )
+            return
+
+        filings = data.get("filings", {})
+        self.cache = {k: Filing.from_dict(v) for k, v in filings.items()}
 
     def save(self) -> None:
         """Persist cache to JSON file."""
-        os.makedirs(self.data_dir, exist_ok=True)
-        cache_path = os.path.join(self.data_dir, "filings_cache.json")
-        with open(cache_path, "w") as f:
-            json.dump({k: v.to_dict() for k, v in self.cache.items()}, f, indent=2)
+        _write_json_atomic(
+            self._cache_path,
+            {
+                "schema_version": CACHE_SCHEMA_VERSION,
+                "filings": {k: v.to_dict() for k, v in self.cache.items()},
+            },
+        )
 
     def get_last_filing(self, cik: str) -> Filing | None:
         """Return the last cached filing for a fund, or None."""

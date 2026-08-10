@@ -10,6 +10,22 @@ from models import Holding, HoldingsChange
 logger = logging.getLogger(__name__)
 
 
+def _format_change_line(old_h: Holding, new_h: Holding) -> str:
+    """Render a position change, leading with shares — the quantity actually traded.
+
+    Market value is shown as context only; it moves with the share price, so it
+    is not the figure the percentage is computed from.
+    """
+    pct_str = ""
+    if old_h.shares > 0:
+        pct = ((new_h.shares - old_h.shares) / old_h.shares) * 100
+        pct_str = f" ({pct:+.1f}%)"
+    return (
+        f"• {new_h.display_name}: {old_h.shares:,} → {new_h.shares:,} shares{pct_str}"
+        f"  |  ${old_h.value:,.0f} → ${new_h.value:,.0f}"
+    )
+
+
 class TelegramNotifier:
     """Sends alerts via Telegram Bot API."""
 
@@ -51,29 +67,23 @@ class TelegramNotifier:
             for h in changes.new_positions[:10]:
                 value_str = f"${h.value:,.0f}" if h.value else "$0"
                 shares_str = f"{h.shares:,}" if h.shares else "0"
-                parts.append(f"• {h.name}: {shares_str} shares = {value_str}")
+                parts.append(f"• {h.display_name}: {shares_str} shares = {value_str}")
             if len(changes.new_positions) > 10:
                 parts.append(f"  ... and {len(changes.new_positions) - 10} more")
             parts.append("")
 
         if changes.increased_positions:
-            parts.append("📈 *INCREASED POSITIONS (>20%):*")
+            parts.append("📈 *INCREASED POSITIONS (>20% of shares):*")
             for old_h, new_h in changes.increased_positions[:10]:
-                pct = ((new_h.value - old_h.value) / old_h.value) * 100 if old_h.value > 0 else 0
-                parts.append(
-                    f"• {new_h.name}: ${old_h.value:,.0f} → ${new_h.value:,.0f} (+{pct:.1f}%)"
-                )
+                parts.append(_format_change_line(old_h, new_h))
             if len(changes.increased_positions) > 10:
                 parts.append(f"  ... and {len(changes.increased_positions) - 10} more")
             parts.append("")
 
         if changes.decreased_positions:
-            parts.append("📉 *DECREASED POSITIONS (>20%):*")
+            parts.append("📉 *DECREASED POSITIONS (>20% of shares):*")
             for old_h, new_h in changes.decreased_positions[:10]:
-                pct = ((old_h.value - new_h.value) / old_h.value) * 100 if old_h.value > 0 else 0
-                parts.append(
-                    f"• {new_h.name}: ${old_h.value:,.0f} → ${new_h.value:,.0f} (-{pct:.1f}%)"
-                )
+                parts.append(_format_change_line(old_h, new_h))
             if len(changes.decreased_positions) > 10:
                 parts.append(f"  ... and {len(changes.decreased_positions) - 10} more")
             parts.append("")
@@ -82,7 +92,7 @@ class TelegramNotifier:
             parts.append("❌ *REMOVED POSITIONS:*")
             for h in changes.removed_positions[:10]:
                 value_str = f"${h.value:,.0f}" if h.value else "$0"
-                parts.append(f"• {h.name}: {value_str}")
+                parts.append(f"• {h.display_name}: {value_str}")
             if len(changes.removed_positions) > 10:
                 parts.append(f"  ... and {len(changes.removed_positions) - 10} more")
             parts.append("")
