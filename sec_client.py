@@ -5,7 +5,7 @@ from xml.etree import ElementTree as ET
 
 from bs4 import BeautifulSoup
 
-from models import Filing, Holding
+from models import Filing, Holding, HoldingsChange, trade_value
 from sec_base import SECBaseClient
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,10 @@ CHANGE_THRESHOLD = 0.2
 # Positions smaller than this (in dollars, either side) are ignored when
 # classifying changes — rounding noise on token stakes isn't worth an alert.
 MIN_POSITION_VALUE = 100_000
+# A move must be at least this big (in dollars) to count as an institutional
+# bet worth alerting on: the position's value for new/exited positions, the
+# value of shares traded for adds/trims.
+BIG_BET_MIN = 100_000_000
 
 
 def _to_int(element: ET.Element | None) -> int:
@@ -231,6 +235,29 @@ def compare_filings(
     return new_positions, increased_positions, decreased_positions, removed_positions
 
 
+def big_bets(changes: HoldingsChange, min_value: float = BIG_BET_MIN) -> HoldingsChange:
+    """Keep only moves of at least ``min_value`` dollars, largest first.
+
+    13F tables list issuers alphabetically, so without this every alert
+    showed the first few names A→Z rather than the biggest moves.
+    """
+    def by_value(h: Holding) -> float:
+        return h.value
+
+    def by_trade(pair: tuple) -> float:
+        return trade_value(*pair)
+
+    def keep(items: list, size) -> list:
+        return sorted((x for x in items if size(x) >= min_value), key=size, reverse=True)
+
+    return HoldingsChange(
+        new_positions=keep(changes.new_positions, by_value),
+        increased_positions=keep(changes.increased_positions, by_trade),
+        decreased_positions=keep(changes.decreased_positions, by_trade),
+        removed_positions=keep(changes.removed_positions, by_value),
+    )
+
+
 # Suggestions offered by the `known` command. Every entry below was confirmed
 # against EDGAR's submissions API on 2026-08-10 — the name in the comment is the
 # registered name that CIK resolves to.
@@ -246,11 +273,5 @@ def compare_filings(
 HEDGE_FUND_CIKS = {
     "Berkshire Hathaway": "0001067983",  # BERKSHIRE HATHAWAY INC
     "Bridgewater Associates": "0001350694",  # Bridgewater Associates, LP
-    "Citadel Advisors": "0001423053",  # CITADEL ADVISORS LLC
-    "D.E. Shaw": "0001009207",  # D. E. Shaw & Co., Inc.
     "Pershing Square": "0001336528",  # Pershing Square Capital Management, L.P.
-    "Point72 Asset Management": "0001603466",  # Point72 Asset Management, L.P.
-    "Renaissance Technologies": "0001037389",  # RENAISSANCE TECHNOLOGIES LLC
-    "Susquehanna International Group": "0001446194",  # SUSQUEHANNA INTERNATIONAL GROUP, LLP
-    "Two Sigma Investments": "0001179392",  # TWO SIGMA INVESTMENTS, LP
 }

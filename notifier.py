@@ -5,7 +5,7 @@ from datetime import datetime
 
 import requests
 
-from models import Holding, HoldingsChange
+from models import Holding, HoldingsChange, trade_value
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ def _format_change_line(old_h: Holding, new_h: Holding) -> str:
     return (
         f"• {new_h.display_name}: {old_h.shares:,} → {new_h.shares:,} shares{pct_str}"
         f"  |  ${old_h.value:,.0f} → ${new_h.value:,.0f}"
+        f"  |  ≈${trade_value(old_h, new_h):,.0f} traded"
     )
 
 
