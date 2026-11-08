@@ -14,6 +14,36 @@
       "cik": "1336528",
       "name": "Pershing Square",
       "last_filing_date": null
+    },
+    {
+      "cik": "1345471",
+      "name": "Trian Fund Management",
+      "last_filing_date": null
+    },
+    {
+      "cik": "1418814",
+      "name": "ValueAct Holdings",
+      "last_filing_date": null
+    },
+    {
+      "cik": "1517137",
+      "name": "Starboard Value",
+      "last_filing_date": null
+    },
+    {
+      "cik": "1791786",
+      "name": "Elliott Investment Management",
+      "last_filing_date": null
+    },
+    {
+      "cik": "921669",
+      "name": "Carl Icahn",
+      "last_filing_date": null
+    },
+    {
+      "cik": "1040273",
+      "name": "Third Point",
+      "last_filing_date": null
     }
   ]
 }

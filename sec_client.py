@@ -259,7 +259,7 @@ def big_bets(changes: HoldingsChange, min_value: float = BIG_BET_MIN) -> Holding
 
 
 # Suggestions offered by the `known` command. Every entry below was confirmed
-# against EDGAR's submissions API on 2026-08-10 — the name in the comment is the
+# against EDGAR's submissions API on 2026-08-10 (activists added 2026-11-08) — the name in the comment is the
 # registered name that CIK resolves to.
 #
 # Keep it that way. An earlier version of this list had ten wrong CIKs, and the
@@ -273,5 +273,11 @@ def big_bets(changes: HoldingsChange, min_value: float = BIG_BET_MIN) -> Holding
 HEDGE_FUND_CIKS = {
     "Berkshire Hathaway": "0001067983",  # BERKSHIRE HATHAWAY INC
     "Bridgewater Associates": "0001350694",  # Bridgewater Associates, LP
+    "Carl Icahn": "0000921669",  # ICAHN CARL C
+    "Elliott Investment Management": "0001791786",  # Elliott Investment Management L.P.
     "Pershing Square": "0001336528",  # Pershing Square Capital Management, L.P.
+    "Starboard Value": "0001517137",  # Starboard Value LP
+    "Third Point": "0001040273",  # Third Point LLC
+    "Trian Fund Management": "0001345471",  # TRIAN FUND MANAGEMENT, L.P.
+    "ValueAct Holdings": "0001418814",  # ValueAct Holdings, L.P.
 }

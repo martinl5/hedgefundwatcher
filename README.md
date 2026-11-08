@@ -179,6 +179,12 @@ See `data/config.json.example` for the source of truth.
 | Berkshire Hathaway | 1067983 |
 | Bridgewater Associates | 1350694 |
 | Pershing Square | 1336528 |
+| Trian Fund Management | 1345471 |
+| ValueAct Holdings | 1418814 |
+| Starboard Value | 1517137 |
+| Elliott Investment Management | 1791786 |
+| Carl Icahn | 921669 |
+| Third Point | 1040273 |
 
 ## Scheduled Runs (Quarterly)
 
