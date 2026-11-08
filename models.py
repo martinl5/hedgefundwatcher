@@ -152,6 +152,13 @@ class HoldingsChange:
         ])
 
 
+def trade_value(old_h: Holding, new_h: Holding) -> float:
+    """Dollar value of the shares actually traded, priced at quarter end."""
+    ref = new_h if new_h.shares else old_h
+    price = ref.value / ref.shares if ref.shares else 0.0
+    return abs(new_h.shares - old_h.shares) * price
+
+
 @dataclass
 class TrackedFund:
     """A hedge fund being tracked."""

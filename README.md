@@ -9,6 +9,8 @@ Track institutional investor filings (13F, 13D, Form 4 insider) via SEC EDGAR wi
 - **Form 4 Insider** - Insider buying/selling with full details (who, how much, position)
 - **Fund Comparison** - Find overlapping holdings across multiple funds
 - **Change Detection** - Alert on new positions, increases, decreases
+- **Big Bets Only** - Moves under $100M are ignored; everything is ranked largest-first
+- **Top Bets** - One ranked list of the quarter's biggest moves across all tracked funds
 
 ## Quick Start
 
@@ -42,11 +44,24 @@ export SEC_USER_AGENT="HedgeFundWatcher/1.0 (you@example.com)"
 ### 3. Add Funds to Track
 
 ```bash
-python main.py add "Michael Burry (Scion)" 1649339
 python main.py add "Bridgewater Associates" 1350694
 python main.py add "Pershing Square" 1336528
 python main.py add "Berkshire Hathaway" 1067983
-python main.py add "D.E. Shaw" 1009207
+```
+
+Quant shops and market makers (Renaissance, Two Sigma, Citadel, Susquehanna,
+etc.) are deliberately not tracked: they hold thousands of names and turn them
+over constantly, so their 13Fs show churn and hedges rather than bets.
+
+### What counts as a bet
+
+A move is reported only if it is at least **$100M** (`BIG_BET_MIN` in
+`sec_client.py`):
+
+- **New / exited positions** — sized by position value
+- **Adds / trims** — sized by the value of shares actually traded (share change × quarter-end price)
+
+Every list is sorted by that size, largest first.
 ```
 
 ### 4. Run Commands
@@ -60,6 +75,9 @@ python main.py run
 
 # Get detailed changes report (sends to Telegram)
 python main.py report
+
+# Biggest moves this quarter across all funds (sends to Telegram)
+python main.py top-bets
 
 # Compare holdings across funds (sends to Telegram)
 python main.py compare
@@ -80,6 +98,7 @@ python main.py insider --days 7
 |---------|-------------|
 | `run` | Scan for new 13F filings |
 | `report` | Detailed changes report → Telegram |
+| `top-bets` | This quarter's biggest moves (≥ $100M), ranked → Telegram |
 | `compare` | Fund comparison → Telegram |
 | `full-report` | Everything → Telegram |
 | `13d` | Search 13D filings from tracked funds |
@@ -153,13 +172,19 @@ Each alert shows:
 
 ## Currently Tracked Funds
 
-| Fund | CIK | Last Filing |
-|------|-----|--------------|
-| Michael Burry (Scion) | 1649339 | 2025-11-03 |
-| Bridgewater Associates | 1350694 | 2026-02-13 |
-| Pershing Square | 1336528 | 2026-02-17 |
-| Berkshire Hathaway | 1067983 | 2026-02-17 |
-| D.E. Shaw | 1009207 | 2026-02-17 |
+See `data/config.json.example` for the source of truth.
+
+| Fund | CIK |
+|------|-----|
+| Berkshire Hathaway | 1067983 |
+| Bridgewater Associates | 1350694 |
+| Pershing Square | 1336528 |
+| Trian Fund Management | 1345471 |
+| ValueAct Holdings | 1418814 |
+| Starboard Value | 1517137 |
+| Elliott Investment Management | 1791786 |
+| Carl Icahn | 921669 |
+| Third Point | 1040273 |
 
 ## Scheduled Runs (Quarterly)
 

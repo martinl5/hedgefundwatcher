@@ -6,9 +6,17 @@ import os
 import re
 import sys
 
-from models import Config, Filing, FilingCache, HoldingsChange, TrackedFund, read_json
+from models import (
+    Config,
+    Filing,
+    FilingCache,
+    HoldingsChange,
+    TrackedFund,
+    read_json,
+    trade_value,
+)
 from notifier import TelegramNotifier
-from sec_client import HEDGE_FUND_CIKS, SECClient, compare_filings
+from sec_client import BIG_BET_MIN, HEDGE_FUND_CIKS, SECClient, big_bets, compare_filings
 from sec_filings import SECFilingsClient
 
 DATA_DIR = "data"
@@ -206,12 +214,8 @@ def run_scan(
                     removed_positions=rem_pos,
                 )
             else:
-                changes = HoldingsChange(
-                    new_positions=parsed_filing.holdings[:20],
-                    increased_positions=[],
-                    decreased_positions=[],
-                    removed_positions=[],
-                )
+                changes = HoldingsChange(new_positions=parsed_filing.holdings)
+            changes = big_bets(changes)
 
             # Deliver the alert *before* recording the filing as seen, so a
             # failed Telegram send leaves the filing to be retried next run
@@ -417,27 +421,19 @@ def show_report(config: Config, notifier: TelegramNotifier | None = None) -> lis
                     removed_positions=rem_pos,
                 )
             else:
-                changes = HoldingsChange(
-                    new_positions=latest_parsed.holdings[:20],
-                    increased_positions=[],
-                    decreased_positions=[],
-                    removed_positions=[],
-                )
-                out.add("(First filing — showing top 20)")
+                changes = HoldingsChange(new_positions=latest_parsed.holdings)
+                out.add("(First filing — showing largest holdings)")
+            changes = big_bets(changes)
 
             if changes.new_positions:
                 out.add(f"\n🆕 *NEW ({len(changes.new_positions)}):*")
-                for h in sorted(changes.new_positions, key=lambda x: x.value, reverse=True)[:8]:
+                for h in changes.new_positions[:8]:
                     out.add(f"• {h.display_name}: ${h.value / 1_000_000:.1f}M")
 
-            # Changes are ranked by share delta, matching how they were detected.
+            # big_bets() already ranked every list by dollar size of the move.
             if changes.increased_positions:
                 out.add(f"\n📈 *INCREASED ({len(changes.increased_positions)}):*")
-                for old_h, new_h in sorted(
-                    changes.increased_positions,
-                    key=lambda x: x[1].shares - x[0].shares,
-                    reverse=True,
-                )[:5]:
+                for old_h, new_h in changes.increased_positions[:5]:
                     pct = ((new_h.shares - old_h.shares) / old_h.shares) * 100 if old_h.shares else 0
                     out.add(
                         f"• {new_h.display_name}: {old_h.shares:,} → {new_h.shares:,} shares"
@@ -446,11 +442,7 @@ def show_report(config: Config, notifier: TelegramNotifier | None = None) -> lis
 
             if changes.decreased_positions:
                 out.add(f"\n📉 *DECREASED ({len(changes.decreased_positions)}):*")
-                for old_h, new_h in sorted(
-                    changes.decreased_positions,
-                    key=lambda x: x[0].shares - x[1].shares,
-                    reverse=True,
-                )[:5]:
+                for old_h, new_h in changes.decreased_positions[:5]:
                     pct = ((old_h.shares - new_h.shares) / old_h.shares) * 100 if old_h.shares else 0
                     out.add(
                         f"• {new_h.display_name}: {old_h.shares:,} → {new_h.shares:,} shares"
@@ -459,13 +451,11 @@ def show_report(config: Config, notifier: TelegramNotifier | None = None) -> lis
 
             if changes.removed_positions:
                 out.add(f"\n❌ *REMOVED ({len(changes.removed_positions)}):*")
-                for h in sorted(changes.removed_positions, key=lambda x: x.value, reverse=True)[
-                    :5
-                ]:
+                for h in changes.removed_positions[:5]:
                     out.add(f"• {h.display_name}: ${h.value / 1_000_000:.1f}M")
 
             if not changes.has_changes():
-                out.add("\n✓ No significant changes")
+                out.add(f"\n✓ No moves ≥ ${BIG_BET_MIN / 1e6:.0f}M")
 
             out.add()
             out.add("-" * 40)
@@ -480,6 +470,70 @@ def show_report(config: Config, notifier: TelegramNotifier | None = None) -> lis
     if notifier:
         out.send_to_telegram("13F Changes Report")
 
+    return out.lines
+
+
+def _fetch_filing(client: SECClient, filing_info: dict) -> Filing | None:
+    """Download and parse one 13F filing's holdings."""
+    url = client.get_filing_url(filing_info)
+    content = client.get_filing_content(url, client.get_filing_folder_url(filing_info))
+    return client.parse_13f_filing(content, url) if content else None
+
+
+def top_bets(
+    config: Config, notifier: TelegramNotifier | None = None, limit: int = 20
+) -> list[str]:
+    """Rank every tracked fund's latest-quarter moves of ≥ BIG_BET_MIN by dollar size."""
+    out = OutputHandler(notifier)
+    client = SECClient()
+    # (size, fund, label, holding name, % of that fund's portfolio, filing date)
+    bets: list[tuple[float, str, str, str, float, str]] = []
+
+    for fund in config.tracked_funds:
+        try:
+            filings = client.get_13f_filings(fund.cik)[:2]
+            if len(filings) < 2:
+                continue
+            latest, prev = _fetch_filing(client, filings[0]), _fetch_filing(client, filings[1])
+            if not latest or not prev or not latest.holdings or not prev.holdings:
+                logger.warning("Could not load filings for %s", fund.name)
+                continue
+
+            changes = big_bets(HoldingsChange(*compare_filings(prev, latest)))
+            date = filings[0]["filing_date"]
+            now_total = sum(h.value for h in latest.holdings) or 1
+            was_total = sum(h.value for h in prev.holdings) or 1
+
+            for h in changes.new_positions:
+                bets.append((h.value, fund.name, "🆕 NEW", h.display_name,
+                             h.value / now_total, date))
+            for label, pairs in (("📈 ADD", changes.increased_positions),
+                                 ("📉 TRIM", changes.decreased_positions)):
+                for old_h, new_h in pairs:
+                    bets.append((trade_value(old_h, new_h), fund.name, label,
+                                 new_h.display_name, new_h.value / now_total, date))
+            for h in changes.removed_positions:
+                bets.append((h.value, fund.name, "❌ EXIT", h.display_name,
+                             h.value / was_total, date))
+        except Exception as e:
+            logger.error("Error processing fund %s: %s", fund.name, e)
+
+    bets.sort(key=lambda b: b[0], reverse=True)
+
+    out.add(f"🏦 *TOP INSTITUTIONAL BETS* (moves ≥ ${BIG_BET_MIN / 1e6:.0f}M)")
+    out.add()
+    if not bets:
+        out.add("No moves above the threshold in the latest filings.")
+    for size, fund_name, label, name, weight, date in bets[:limit]:
+        # Weight is the position's share of the portfolio after the move
+        # (before it, for exits).
+        out.add(f"{label} *{name}* — ${size / 1e6:,.0f}M")
+        out.add(f"   {fund_name} · {weight:.1%} of portfolio · filed {date}")
+    if len(bets) > limit:
+        out.add(f"\n...and {len(bets) - limit} more")
+
+    if notifier:
+        out.send_to_telegram("Top Institutional Bets")
     return out.lines
 
 
@@ -780,7 +834,8 @@ def main() -> None:
         epilog="""
 Examples:
   python main.py run                                    # Run scan now
-  python main.py add "Renaissance Technologies" 1037029  # Add a fund
+  python main.py add "Pershing Square" 1336528         # Add a fund
+  python main.py top-bets                               # Biggest moves this quarter
   python main.py list                                   # List tracked funds
   python main.py known                                  # List known hedge funds
   python main.py test-telegram                          # Test Telegram config
@@ -819,6 +874,9 @@ quarterly runs, schedule `python main.py run` with cron or GitHub Actions.
     subparsers.add_parser("test-telegram", help="Send a test Telegram message")
     subparsers.add_parser("report", help="Show detailed changes report for all funds")
     subparsers.add_parser("compare", help="Compare holdings across all tracked funds")
+    subparsers.add_parser(
+        "top-bets", help="Rank this quarter's biggest institutional moves (≥ $100M)"
+    )
     subparsers.add_parser("full-report", help="Generate full report and send to Telegram")
 
     d13_parser = subparsers.add_parser("13d", help="Search 13D/13G filings from tracked funds")
@@ -881,6 +939,9 @@ quarterly runs, schedule `python main.py run` with cron or GitHub Actions.
     elif args.command == "compare":
         compare_funds(config, make_notifier(config))
 
+    elif args.command == "top-bets":
+        top_bets(config, make_notifier(config))
+
     elif args.command == "full-report":
         notifier = make_notifier(config)
         if notifier is None:
@@ -888,6 +949,7 @@ quarterly runs, schedule `python main.py run` with cron or GitHub Actions.
             print("Set TELEGRAM_TOKEN and TELEGRAM_CHAT_ID (or use --token/--chat-id)")
             return
         notifier.send_message("📊 *Generating FULL REPORT...*")
+        top_bets(config, notifier)
         show_report(config, notifier)
         compare_funds(config, notifier)
         notifier.send_message("✅ Full report complete!")

@@ -3,8 +3,8 @@
 import os
 from unittest.mock import patch
 
-from models import Filing, Holding
-from sec_client import SECClient, compare_filings
+from models import Filing, Holding, HoldingsChange
+from sec_client import SECClient, big_bets, compare_filings
 
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -285,3 +285,23 @@ def test_get_fund_name_returns_none_on_failure():
     client = SECClient()
     with patch.object(client, "get_company_submissions", return_value=None):
         assert client.get_fund_name("1649339") is None
+
+
+# ─────────────────────────── big_bets ────────────────────────────
+
+
+def test_big_bets_filters_small_moves_and_ranks_by_dollar_size():
+    # Input is alphabetical, as 13F tables are; output must be largest-first.
+    new = [
+        Holding("A", "Alpha", 1, 150_000_000),
+        Holding("B", "Beta", 1, 50_000_000),  # below $100M → dropped
+        Holding("Z", "Zulu", 1, 900_000_000),
+    ]
+    # Adds are sized by shares traded × price, not by position value:
+    # 1M → 2M shares at $200 = $200M traded; 1M → 1.3M at $100 = $30M traded.
+    big_add = (Holding("C", "Big", 1_000_000, 200e6), Holding("C", "Big", 2_000_000, 400e6))
+    small_add = (Holding("D", "Small", 1_000_000, 100e6), Holding("D", "Small", 1_300_000, 130e6))
+    out = big_bets(HoldingsChange(new_positions=new, increased_positions=[small_add, big_add]))
+
+    assert [h.name for h in out.new_positions] == ["Zulu", "Alpha"]
+    assert out.increased_positions == [big_add]
